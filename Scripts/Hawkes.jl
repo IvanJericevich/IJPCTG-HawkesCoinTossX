@@ -2,7 +2,7 @@
 # Function to simulate a multivariate self exciting point process
 # Using the method outlined in Toke and Pomponio 2012.
 
-using LinearAlgebra, Plots, LaTeXStrings, Optim, Random
+using LinearAlgebra, Random
 
 #---------------------------------------------------------------------------
 ### SIMUATION
