@@ -21,6 +21,7 @@ HawkesImplementation:
 using DataFrames, Dates
 cd(@__DIR__); clearconsole()
 include("Hawkes.jl")
+include("CoinTossXUtilities.jl")
 #---------------------------------------------------------------------------------------------------
 
 #----- Simulation functions -----#
@@ -28,42 +29,52 @@ function InjectSimulation(arrivals; seed = 1)
     Random.seed!(seed)
     StartJVM()
     client = Login(1, 1)
-    bids = Dict{String, Int64}(); asks = Dict{String, Int64}()
     try # This ensures that the client gets logged out whether an error occurs or not
-        SubmitOrder(client, Order(arrivals.OrderRef[1], arrivals.Side[1], "Limit", Int(arrivals.Quantity[1]), Int(arrivals.Price[1])))
-        WaitForMarketData(client)
+        SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", Int(arrivals.Volume[1]), Int(arrivals.Price[1])))
         arrivals.arrivalTime = arrivals.DateTime .+ Time(now())
         Juno.progress() do id # Progress bar
             for i in 2:nrow(arrivals)
-                # Validation
-                if isempty(bids) || isempty(asks)
-                    println("Broken LOB")
-                end
-                if arrivals.Type[i] == :LO
-                    arrivals.arrivalTime[i] <= Time(now()) ? println("Timeout") : sleep(arrivals.arrivalTime[i] - Time(now()))
-                    SubmitOrder(client, Order(orderId, side, type, volume, price))
-
-                elseif arrivals.Type[i] == :MO
-                    arrivals.arrivalTime[i] <= Time(now()) ? println("Timeout") : sleep(arrivals.arrivalTime[i] - Time(now()))
-                    SubmitOrder(client, Order(arrivals.OrderId[i], arrivals.Side[i], "Market", arrivals.Volume[i]))
-                else
-                    if arrivals.Side == "Buy"
-                        if arrivals.Passive[i]
-
-                        else
+                if arrivals.Type[i] == :LO # Limit order
+                    bestBid = ReceiveMarketData(client, :Bid, :Price); bestAsk = ReceiveMarketData(client, :Ask, :Price)
+                    if bestBid == 0 && bestAsk == 0 # If both sides are empty quit simulation
+                        error("Both sides of the LOB have emptied.")
+                    end
+                    spread = abs(bestAsk - bestBid)
+                    if arrivals.Side[i] == "Buy"
+                        if arrivals.Passive[i] # Place order 1 tick below best
+                            price = bestBid != 0 ? bestBid - 1 : continue # If the ask side LOB is empty skip everything below (since sending an order would change the best)
+                        else # If the spread is more than one tick improve the best, otherwise place at best
+                            price = spread > 1 ? bestBid + 1 : bestBid # bestBid == 0 => price = 1; bestAsk == 0 => price = bestBid + 1; bestBid == 0 && bestAsk == 0 => error and finish
                         end
                     else
+                        if arrivals.Passive[i] # Place order 1 tick above best
+                            price = bestAsk != 0 ? bestAsk + 1 : continue # If the bid side LOB is empty skip everything below (since sending an order would change the best)
+                        else # If the spread is more than one tick improve the best, otherwise place at best
+                            price = spread > 1 ? bestAsk - 1 : bestAsk # bestBid == 0 => price = bestAsk - 1; bestAsk == 0 => price = 1
+                        end
                     end
-
-
-
-                    orderId =
-                    price =
-
-                    arrivals.arrivalTime[i] <= Time(now()) ? println("Timeout") : sleep(arrivals.arrivalTime[i] - Time(now()))
+                    arrivals.arrivalTime[i] <= Time(now()) ? println(string("Timeout: ", Time(now()) - arrivals.arrivalTime[i])) : sleep(arrivals.arrivalTime[i] - Time(now()))
+                    SubmitOrder(client, Order(arrivals.OrderId[i], arrivals.Side[i], "Limit", Int(arrivals.Volume[i]), price))
+                elseif arrivals.Type[i] == :MO # Market order
+                    best = arrivals.Side[i] == "Buy" ? ReceiveMarketData(client, :Ask, :Price) : ReceiveMarketData(client, :Bid, :Price) # Get the best on the contra side
+                    if best != 0 # If the LOB is empty on the contra side do nothing
+                        arrivals.arrivalTime[i] <= Time(now()) ? println(string("Timeout: ", Time(now()) - arrivals.arrivalTime[i])) : sleep(arrivals.arrivalTime[i] - Time(now()))
+                        SubmitOrder(client, Order(arrivals.OrderId[i], arrivals.Side[i], "Market", arrivals.Volume[i]))
+                    end
+                else # Order cancel
+                    (LOBSnapshot, best) = arrivals.Side[i] == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask))
+                    if length(LOBSnapshot) > 1 # Atleast two orders in the LOB side
+                        OrderIds = arrivals.Passive[i] ? [k for (k,v) in LOBSnapshot if v != best] : [k for (k,v) in LOBSnapshot if v == best]
+                    elseif length(LOBSnapshot) == 1 && !arrivals.Passive[i] # Only order in the LOB is the best => only aggressive cancel is applicable
+                        OrderIds = [k for (k,v) in LOBSnapshot if v == best]
+                    else # LOB is empty or passive cancel with only one order in the LOB => wait for next LO. Skip everything below
+                        continue
+                    end
+                    orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
+                    price = LOBSnapshot[orderId] # Get the price of the corresponding orderId
+                    arrivals.arrivalTime[i] <= Time(now()) ? println(string("Timeout: ", Time(now()) - arrivals.arrivalTime[i])) : sleep(arrivals.arrivalTime[i] - Time(now()))
                     CancelOrder(client, orderId, arrivals.Side[i], price)
                 end
-                WaitForMarketData(client)
                 @info "Trading" progress=(arrivals.DateTime[i] / arrivals.DateTime[end]) _id=id # Update progress
             end
         end
@@ -72,7 +83,7 @@ function InjectSimulation(arrivals; seed = 1)
     end
 end
 function RPareto(xn, α, n = 1)
-    return xn ./ ((rand(n)).^(1/α))
+    return xn ./ (rand(n) .^ (1 / α))
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -87,7 +98,7 @@ Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, fal
 sort!(arrivals, :DateTime)
 arrivals.DateTime .-= arrivals.DateTime[1]
 delete!(arrivals, [1, 2])
-InjectSimulation(arrivals)
+InjectSimulation(arrivals, seed = 5)
 #---------------------------------------------------------------------------------------------------
 
 
