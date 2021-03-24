@@ -9,7 +9,7 @@ DataCleaning:
     3. Clean raw data into L1LOB and OHLCV data
 =#
 using CSV, DataFrames, Dates, Plots
-cd(@__DIR__); clearconsole()
+clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Data preparation -----#
