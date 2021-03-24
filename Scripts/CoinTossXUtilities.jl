@@ -12,11 +12,13 @@ CoinTossXUtilities:
     6. Modify an existing order
     7. Cancel an existing order
     8. Receive updates to the best bid/ask
-    9. Market data timeouts
-    10. Destroy client by logging out and ending the trading session
+    9. Receive snapshot of LOB
+    10. Market data timeouts
+    11. Destroy client by logging out and ending the trading session
 =#
 using JavaCall
-cd(@__DIR__); clearconsole()
+import JavaCall: iterator
+#cd(@__DIR__); clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Initialise Java Virtual Machine with required byte code paths -----#
@@ -104,6 +106,37 @@ function ReceiveMarketData(client::Client, side::Symbol, type::Symbol)
         data = type == :Price ? jcall(client.javaObject, "getOffer", jlong, ()) : jcall(client.javaObject, "getOfferQuantity", jlong, ())
     end
     return data
+end
+function ReceiveMarketData(client::Client, side::Symbol)
+    best = NamedTuple()
+    if side == :Bid
+        return (Price = jcall(client.javaObject, "getBid", jlong, ()), Volume = jcall(client.javaObject, "getBidQuantity", jlong, ()))
+    else
+        return (Price = jcall(client.javaObject, "getOffer", jlong, ()), Volume = jcall(client.javaObject, "getOfferQuantity", jlong, ()))
+    end
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Receive snapshot of LOB -----#
+function ReceiveLOBSnapshot(client::Client, side::String)
+    orders = jcall(client.javaObject, "lobSnapshot", JavaObject{Symbol("java.util.ArrayList")}, ())
+    LOB = Dict{String, NamedTuple}()
+    for order in iterator(orders)
+        fields = split(unsafe_string(JavaCall.JNI.GetStringUTFChars(Ptr(order), Ref{JavaCall.JNI.jboolean}())), ",")
+        if fields[2] == side
+            push!(LOB, fields[1] => (Price = parse(Int, fields[4]), Volume = parse(Int, fields[3])))
+        end
+    end
+    return LOB
+end
+function ReceiveLOBSnapshot(client::Client)
+    orders = jcall(client.javaObject, "lobSnapshot", JavaObject{Symbol("java.util.ArrayList")}, ())
+    LOB = Dict{String, NamedTuple}()
+    for order in iterator(orders)
+        fields = split(unsafe_string(JavaCall.JNI.GetStringUTFChars(Ptr(order), Ref{JavaCall.JNI.jboolean}())), ",")
+        push!(LOB, fields[1] => (Side = fields[2], Price = parse(Int, fields[4]), Volume = parse(Int, fields[3])))
+    end
+    return LOB
 end
 #---------------------------------------------------------------------------------------------------
 
