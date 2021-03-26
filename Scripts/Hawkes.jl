@@ -251,3 +251,6 @@ function Calibrate(θ::Vector{Float64}, empiricalMoments::Vector{Float64}, T::Un
     return ΣSquaredMomentDeviations(λ₀, α, β, T, empiricalMoments)
 end
 #---------------------------------------------------------------------------------------------------
+
+#----- Validation -----#
+#---------------------------------------------------------------------------------------------------
