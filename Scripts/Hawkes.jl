@@ -1,313 +1,253 @@
-## Author: Patrick Chang
-# Function to simulate a multivariate self exciting point process
-# Using the method outlined in Toke and Pomponio 2012.
+#=
+Hawkes
+- Julia version: 1.5.3
+- Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
+- Function: Provide the necessary functions for calibrating and simulating a multivariate Hawkes process (Toke and Pomponio 2012)
+- Structure:
+	1. Supplementary functions
+	2. Simulation by thinning
+	3. Intensity path
+	4. Recursive relation
+	5. Integrated intensity
+	6. Log-likelihood objective
+	7. Generalised residuals
+	8. Hawkes moments
+	9. Method of moments objective
+	10. Calibration
+- Symbols:
+	α = DxD matrix of excitations
+    β = DxD matrix of rates of decay
+    λ₀ = D-vector of baseline intensities
+    u = Random sample from U(0, 1)
+    λₜ = D-vector of intensities for each process at time t
+    ∂λ = DxD matrix of intensity jumps
+    τ = Inter-arrival time sampled/obtained from the inverse transform method
+    Γ = Spectral radius to check stability conditions of the process
+    λ_star = The cummulative value of the intensity of all processes
+- TODO: Consider exponentiation of paramaters in calibration to have log interpretation
+=#
+using Random, LinearAlgebra
+#---------------------------------------------------------------------------------------------------
 
-using LinearAlgebra, Random
-
-#---------------------------------------------------------------------------
-### SIMUATION
-# The simulation fuction is based on Dharmesh Sing's implementation from Java
-#---------------------------------------------------------------------------
-## Supporting Functions for the Simulation
-
-# beta = DxD matrix of double floats
-# alpha = DxD matrix of double floats
-
-# Returns the Spectral Radius of Γ = A / B
-# to check if stability conditions have been met
-function SpectralRadius(alpha, beta)
-    dimension = size(alpha)[1]
+#----- Supplementary functions -----#
+# Returns the Spectral Radius of Γ = A / B to check if stability conditions have been met (to ensure stationarity) (Toke-Pomponio (2011) - Modelling Trades-Through in a Limited Order-Book)
+function SpectralRadius(α::Array{Float64, 2}, β::Array{Float64, 2})
+    dimension = size(α, 1)
     Γ = zeros(dimension, dimension)
     for i in 1:dimension
         for j in 1:dimension
-            if beta[i,j] != 0
-                Γ[i,j] = alpha[i,j] / beta[i,j]
+            if β[i,j] != 0
+                Γ[i,j] = α[i,j] / β[i,j]
             end
         end
     end
-    eigenval = eigen(Γ).values
-    eigenval = abs.(eigenval)
-    return maximum(eigenval)
+    eigenvalue = abs.(eigen(Γ).values)
+    if maximum(eigenvalue) >= 1
+        error("Unstable, Spectral Radius of Γ = A/B must be less than 1")
+    end
 end
-
-# D = random uniform sample
-# I_star = sum(m_lambda) + additional prob of no sample simulated
-# m_lambda = vector of intensities for each process at time t
-
-# Returns the index n_0 for the m^{th} process for which
-# a sample must be drawn
-function attribute(D, I_star, m_lambda)
+# Returns the index of the process to which a sampled event can be attributed
+function Attribute(u::Float64, λ_star::Float64, λₜ::Vector{Float64})
     index = 1
-    cumulative = m_lambda[1]
-
-    while D > (cumulative/I_star)
-        index = index + 1
-        cumulative += m_lambda[index]
+    cummulativeIntensity = λₜ[1]
+    while u > (cummulativeIntensity / λ_star)
+        index += 1
+        cummulativeIntensity += λₜ[index]
     end
     return index
 end
+#---------------------------------------------------------------------------------------------------
 
-#---------------------------------------------------------------------------
-## Simulation Function
-
-# lambda0 = vector of baseline intensities
-# alpha = DxD matrix of excitation (double floats)
-# beta = DxD matrix of rates of relaxation (double floats)
-
-# Returns vectors of sampled times from the multivariate
-# D-type Hawkes process
-function simulateHawkes(lambda0, alpha, beta, T; kwargs...)
-
-    kwargs = Dict(kwargs)
-
-    if haskey(kwargs, :seed)
-        seed = kwargs[:seed]
-    else
-        seed = 1
-    end
-
-    # Initialize
-    dimension = length(lambda0)
-    history = Vector{Vector{Float64}}()
-    for i in 1:dimension
-        history = push!(history, [])
-    end
-
-    dlambda = zeros(dimension, dimension)
-    m_lambda0 = lambda0
-    m_lambda = zeros(dimension, 1)
-
-    SR = SpectralRadius(alpha, beta)
-    if SR >= 1
-        return println("WARNING: Unstable, Spectral Radius of Γ = A/B must be less than 1")
-    end
-
-    lambda_star = 0.0
-    t = 0.0
-
-    for i in 1:dimension
-        lambda_star += m_lambda0[i]
-        m_lambda[i] = m_lambda0[i]
-    end
-
-    # First Event
+#----- Simulation by thinning -----#
+# Returns vectors of sampled times from the multivariate D-type Hawkes process
+function ThinningSimulation(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Union{Float64, Int64}; seed::Int64 = 1)
     Random.seed!(seed)
-    U = rand()
-    s = - log(U)/lambda_star
-
+    SpectralRadius(α, β)
+    # Initialization
+    dimension = length(λ₀)
+    history = [Vector{Float64}() for _ in 1:dimension]
+    ∂λ = zeros(dimension, dimension)
+    λₜ = λ₀
+    λ_star = sum(λ₀)
+    t = 0.0
+    # First event
+    u = rand()
+    s = - log(u) / λ_star # The first arrival is simply the inter arrival time to next event
     if s <= T
-        D = rand()
-        n0 = attribute(D, lambda_star, m_lambda)
-        history[n0] = append!(history[n0], s)
-
-        for i in 1:dimension
-            dlambda[i,n0] = alpha[i,n0]
-            m_lambda[i] = m_lambda0[i] + alpha[i,n0]
-        end
+        u = rand()
+        m = Attribute(u, λ_star, λₜ)
+        push!(history[m], s)
+        λₜ = λ₀ .+ α[:, m]
+        ∂λ[:, m] = α[:, m]
     else
-        return history
+        error("First event time is greater than the horizon")
     end
-
-    t = s
-
     # General Routine
-    lambda_star = 0.0
-    for i in 1:dimension
-        lambda_star = lambda_star + m_lambda[i]
-    end
-
-    while true
-        seed += 1
-        Random.seed!(seed)
-
-        U = rand()
-        s = s - (log(U) / lambda_star)
-
-        seed += 1
-        Random.seed!(seed)
-        if s <= T
-            D = rand()
-            I_M = 0.0
-            for i in 1:dimension
-                dl = 0.0
-                for j in 1:dimension
-                    dl += dlambda[i,j] * exp(-beta[i,j] * (s - t))
+    t = s
+    λ_star = sum(λₜ)
+    Juno.progress() do id # Progress bar
+        while true
+            u = rand()
+            τ = - log(u) / λ_star # Sample inter-arrival time using inverse-transform method
+            s += τ
+            if s <= T
+                u = rand()
+                λₜ = λ₀ .+ vec(sum(∂λ .* exp.(-β .* (s - t)), dims = 2)) # Sum across columns (index j) for each row
+                if u <= (sum(λₜ) / λ_star) # Apply acceptance-rejection
+                    m = Attribute(u, λ_star, λₜ)
+                    push!(history[m], s)
+                    λ_star = 0.0
+                    ∂λ = ∂λ .* exp.(-β .* (s - t))
+                    ∂λ[:, m] += α[:, m]
+                    λ_star = sum(λ₀ .+ ∂λ)
+                    t = s
+                else
+                    λ_star = sum(λₜ)
                 end
-                m_lambda[i] = m_lambda0[i] + dl
-                I_M = I_M + m_lambda[i]
-            end
-
-            if D <= (I_M / lambda_star)
-                n0 = attribute(D, lambda_star, m_lambda)
-                history[n0] = append!(history[n0], s)
-                lambda_star = 0.0
-                for i in 1:dimension
-                    dl = 0.0
-                    for j in 1:dimension
-                        dlambda[i,j] = dlambda[i,j] * exp(-beta[i,j] * (s - t))
-                        if n0 == j
-                            dlambda[i,n0] += alpha[i,n0]
-                        end
-                        dl += dlambda[i,j]
-                    end
-                    lambda_star += m_lambda0[i] + dl
-                end
-                t = s
             else
-                lambda_star = I_M
+                return history
             end
-        else
-            return history
+            @info "Simulating" progress=(s / T) _id=id # Update progress
         end
     end
 end
+#---------------------------------------------------------------------------------------------------
 
-#---------------------------------------------------------------------------
-## Supporting Functions to extract useful information from the Simulation
-
+#----- Intensity path -----#
 # Extract the Intensity fuction given the simulation paths
-function Intensity(index, time, history, lambda0, alpha, beta)
-    l = repeat([lambda0[index]], length(time))
-    dimension = length(lambda0)
-
+function Intensity(m::Int64, time::Vector{Float64}, history::Vector{Vector{Float64}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2})
+    λ = fill(λ₀[m], length(time))
+    dimension = length(λ₀)
     for t in 1:length(time)
-        for h in 1:length(history[index])
-            if time[t] > history[index][h]
-                for d in 1:dimension
-                    c_alpha = alpha[d,index]
-                    c_beta = beta[d,index]
-
-                    l[t] += c_alpha * exp(-c_beta * (time[t] - history[index][h]))
-                end
-            end
-        end
-    end
-    return l
-end
-
-#---------------------------------------------------------------------------
-### CALIBRATION
-#---------------------------------------------------------------------------
-## Supporting functions to calculate R^{nm}(l) used as a Recursion
-# outlined in Toke and Pomponio 2012.
-
-# Recursion function to compute R_j^{mn}(l) in the loglikelihood
-# for a multivariate Hawkes process
-function recursion(history, beta, m, n)
-    history_m = history[m]
-    history_m = append!([0.0], history_m)
-    N = length(history_m)
-    R = zeros(Real, N, 1)
-    history_n = history[n]
-    beta = beta[m,n]
-    ix = Int(1)
-    for i in 2:N
-        if n == m
-            R[i] = exp(-beta * (history_m[i] - history_m[i-1])) * (1 + R[i-1])
-        else
-            R[i] = exp(-beta * (history_m[i] - history_m[i-1])) * R[i-1]
-            for j in ix:length(history_n)
-                if history_n[j] >= history_m[i-1]
-                    if history_n[j] < history_m[i]
-                        R[i] += exp(-beta*(history_m[i] - history_n[j]))
-                    else
-                        ix = j
-                        break
-                    end
-                end
-            end
-        end
-    end
-    return R[2:end]
-end
-
-# Function to compute the integrated intensity from [0,T]
-# ∫_0^T λ^m(t) dt in the loglikelihood
-# for a multivariate Hawkes process
-function Λ_m(history, T, lambda0, alpha, beta, m)
-    Λ = lambda0[m] * T
-    dimension = length(lambda0)
-
-    Γ = zeros(Real, dimension, dimension)
-    for i in 1:dimension
         for j in 1:dimension
-            if beta[i,j] != 0
-                Γ[i,j] = Real(alpha[i,j] / beta[i,j])
+            for tʲₖ in history[j]
+                if tʲₖ < time[t]
+                    λ[t] += α[m, j] * exp(- β[m, j] * (time[t] - tʲₖ))
+                end
             end
         end
     end
-
-    for n in 1:dimension
-        for i in 1:length(history[n])
-            if history[n][i] <= T
-                Λ += Γ[m,n] * (1 - exp(-beta[m,n] * (T - history[n][i])))
-            end
-        end
-    end
-    return Λ
+    return λ
 end
+#---------------------------------------------------------------------------------------------------
 
-#---------------------------------------------------------------------------
-## Functions to compute the log-likelihood to optimize using MLE
-# outlined in Toke and Pomponio 2012.
-
-# Computes the partial loglikelihoods and sums them up to obtain the
-# full loglikelihood
-function loglikeHawkes(history, lambda0, alpha, beta, T)
-    dimension = length(lambda0)
-    ll = zeros(Real, dimension, 1)
-
-    for m in 1:dimension
-        ll[m] = T - Λ_m(history, T, lambda0, alpha, beta, m)
-        R_mn = zeros(Real, length(history[m]), dimension)
-        for n in 1:dimension
-            R_mn[:,n] = recursion(history, beta, m, n)
+#----- Recursive relation -----#
+# Supporting function to calculate the recursive function R^{ij}(l) in the loglikelihood for a multivariate Hawkes process (Toke-Pomponio (2011) - Modelling Trades-Through in a Limited Order-Book)
+function R(history::Vector{Vector{Float64}}, β::Array{Float64, 2}, i::Int64, j::Int64)
+    tⁱ = vcat([0.0], history[i]); tʲ = history[j]
+    N = length(tⁱ)
+    Rⁱᴶ = zeros(N, 1)
+    for n in 2:N
+        if i == j
+            Rⁱᴶ[n] = exp(- β[i, j] * (tⁱ[n] - tⁱ[n - 1])) * (1 + Rⁱᴶ[n - 1])
+        else
+            k = findall(x -> tⁱ[n - 1] <= x < tⁱ[n], tʲ)
+            Rⁱᴶ[n] = exp(- β[i, j] * (tⁱ[n] - tⁱ[n - 1])) * Rⁱᴶ[n - 1] + sum(exp.(- β[i, j] .* (tⁱ[n] .- tʲ[k])))
         end
+    end
+    return Rⁱᴶ[2:end]
+end
+#---------------------------------------------------------------------------------------------------
 
-        ind = findall(x-> x.< 0, R_mn)
-        R_mn[ind] .= 0
-
-        for l in 1:length(history[m])
-            d = lambda0[m] + sum(alpha[m,:] .* R_mn[l,:])
-            if d > 0
-                ll[m] += log(d)
-            else
-                ll[m] += -100
+#----- Integrated intensity -----#
+# Function to compute the integrated intensity from [0,T] ∫_0^T λ^m(t) dt in the loglikelihood for a multivariate Hawkes process
+function Λ(history::Vector{Vector{Float64}}, T::Union{Float64, Int64}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, m::Int64)
+    Λᵐ = λ₀[m] * T
+    dimension = length(λ₀)
+    for j in 1:dimension
+        if β[m, j] != 0
+            for tₙ in history[j]
+                Λᵐ += (α[m, j] / β[m, j]) * (1 - exp(-β[m, j] * (T - tₙ)))
             end
         end
     end
-    return sum(ll)
+    return Λᵐ
 end
+#---------------------------------------------------------------------------------------------------
 
-#---------------------------------------------------------------------------
-### Testing the calibration
-#---------------------------------------------------------------------------
-
-# lambda0 = [par[1] par[1]]
-# alpha = [0 par[2]; par[2] 0]
-# beta = [0 par[3]; par[3] 0]
-
-function GeneralisedResiduals(history, lambda0, alpha, beta)
-    # Initialize
-    dimension = length(lambda0)
-    GE = Vector{Vector{Float64}}()
-    for i in 1:dimension
-        GE = push!(GE, [])
-    end
-    # Loop through each dimension
+#----- Log-likelihood objective -----#
+# Computes the partial log-likelihoods and sums them up to obtain the full log-likelihood
+function LogLikelihood(history::Vector{Vector{Float64}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Union{Float64, Int64})
+    dimension = length(λ₀)
+    loglikelihood = Vector{Float64}(undef, dimension)
     for m in 1:dimension
-        # Initialise the integrated intensity
-        Λ = zeros(length(history[m]), 1)
-        # Loop through the observations in each process
-        for l in 1:length(history[m])
-            Λ[l] = Λ_m(history, history[m][l], lambda0, alpha, beta, m)
+        loglikelihood[m] = T - Λ(history, T, λ₀, α, β, m)
+        Rⁱᴶ = zeros(length(history[m]), dimension)
+        for j in 1:dimension
+            Rⁱᴶ[:, j] = R(history, β, m, j)
         end
-        # Compute the error and push it into Generalised Errors
-        for l in 2:length(history[m])
-            # Append results
-            GE[m] = append!(GE[m], Λ[l] - Λ[l-1])
-        end
+        loglikelihood[m] += sum(map(l -> log(λ₀[m] + sum(α[m, :] .* Rⁱᴶ[l, :])), 1:length(history[m])))
+    end
+    return sum(loglikelihood)
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Generalised residuals -----#
+function GeneralisedResiduals(history::Vector{Vector{Float64}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2})
+    dimension = length(λ₀)
+    GE = [Vector{Float64}() for _ in 1:dimension]
+    for m in 1:dimension # Loop through each dimension
+		integratedIntensity = map(t -> Λ(history, t, λ₀, α, β, m), history[m]) # Loop through the observations in each process
+		GE[m] = diff(integratedIntensity) # Compute the error
     end
     return GE
 end
-# GE = GeneralisedResiduals(t, lambda0, alpha, beta)
+#---------------------------------------------------------------------------------------------------
+
+#----- Hawkes moments -----#
+# Functions for calculating the moments of a multivariate Hawkes process
+function JumpMean(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Union{Float64, Int64})
+    return ((inv(β - α) * β) * λ₀) .* T
+end
+function JumpVariance(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Union{Float64, Int64})
+	stationaryRegimeExpectedIntensity = (inv(β - α) * β) * λ₀
+	lambdaInfinity = lyap(α - β, (α * Diagonal(stationaryRegimeExpectedIntensity)) * transpose(α))
+	inverseAlphaMinusBeta = inv(α - β)
+	term1 = exp(T .* (α - β))
+	term2 = (inverseAlphaMinusBeta * (-T)) + (inverseAlphaMinusBeta^2) * (term1 - I)
+	term3 = term2 * (lambdaInfinity + (α * Diagonal(stationaryRegimeExpectedIntensity)))
+	return term3 + transpose(term3) + (Diagonal(stationaryRegimeExpectedIntensity) .* T)
+end
+function JumpAutocorrelation(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Union{Float64, Int64}, lag::Int64)
+	dimension = length(λ₀)
+	jumpVariance = JumpVariance(λ₀, α, β, T)
+	stationaryRegimeExpectedIntensity = (inv(β - α) * β) * λ₀
+	lambdaInfinity = lyap(α - β, (α * Diagonal(stationaryRegimeExpectedIntensity)) * transpose(α))
+	term1 = exp(T .* (α - β))
+	term2 = exp(lag .* (α - β))
+	term3 = inv(α - β) * (term1 - I)
+	result = (term3 * term2 * term3) * (lambdaInfinity + (α * Diagonal(stationaryRegimeExpectedIntensity)))
+	for i in 1:dimension
+		for j in 1:dimension
+			result[i, j] /= sqrt(jumpVariance[i, i] * jumpVariance[j, j])
+		end
+	end
+	return result
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Method of moments objective -----#
+# Function to calculate the sum-of-squares of deviations of theoretical moments from empirical moments
+function ΣSquaredMomentDeviations(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Union{Float64, Int64}, empiricalMoments::Vector{Float64})
+	theoreticalMoments = vcat(JumpMean(λ₀, α, β, T), reduce(vcat, JumpVariance(λ₀, α, β, T)), reduce(vcat, JumpAutocorrelation(λ₀, α, β, T, 1)))
+	return transpose(1 .- (theoreticalMoments ./ empiricalMoments)) * I * (1 .- (theoreticalMoments ./ empiricalMoments))
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Calibration -----#
+# Functions to be used in the optimization routine (the below objectives should be minimized)
+function Calibrate(θ::Vector{Float64}, history::Vector{Vector{Float64}}, T::Union{Float64, Int64}) # Maximum likelihood estimation
+    dimension = Int(round(sqrt(length(θ) + 1) - 1))
+    λ₀ = θ[1:dimension]
+    α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
+    β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
+    return -LogLikelihood(history, λ₀, α, β, T)
+end
+function Calibrate(θ::Vector{Float64}, empiricalMoments::Vector{Float64}, T::Union{Float64, Int64}) # Method of moments estimation
+    dimension = Int(round(sqrt(length(θ) + 1) - 1))
+    λ₀ = θ[1:dimension]
+    α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
+    β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
+    return ΣSquaredMomentDeviations(λ₀, α, β, T, empiricalMoments)
+end
+#---------------------------------------------------------------------------------------------------
