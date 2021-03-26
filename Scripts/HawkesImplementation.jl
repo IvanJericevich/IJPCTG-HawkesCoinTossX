@@ -132,17 +132,3 @@ end
 reduceLiquid
 increaseLiquid
 =#
-function Hello()
-    try
-        for i in 1:20
-            if i == 10
-                continue
-            else
-                println(i)
-            end
-        end
-    finally
-        println("HELLO")
-    end
-end
-Hello()

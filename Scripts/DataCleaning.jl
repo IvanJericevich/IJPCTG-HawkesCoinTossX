@@ -7,21 +7,24 @@ DataCleaning:
     1. Data preparation
     2. Supplementary functions
     3. Clean raw data into L1LOB and OHLCV data
+- TODO: Cancels may cancel the wrong order since orderIds do not correspond to limit orders, so include some checks to see if the orderId is present
+- TODO: Check if crossed limit order converted to trade is duplicated in OrdersSubmitted (i.e. 3 duplicates)
 =#
 using CSV, DataFrames, Dates, Plots
 clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Data preparation -----#
-limitOrders = CSV.File("OrdersSubmitted.csv", drop = [:SecurityId], types = Dict(:OrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame |> x -> filter(y -> y.Price != 0, x)
-limitOrders.Type = fill(:LO, nrow(limitOrders))
-marketOrders = CSV.File("Trades.csv", types = Dict(:OrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
-marketOrders.Type = fill(:MO, nrow(marketOrders))
+rawOrders = CSV.File("Data/OrdersSubmitted.csv", drop = [:SecurityId], types = Dict(:OrderId => Int64, :ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame |> x -> filter(y -> y.Price != 0, x)
+limitOrders = filter(x -> x.Volume != 0, rawOrders); cancelOrders = filter(x -> x.Volume == 0, rawOrders); marketOrders = CSV.File("Data/Trades.csv", types = Dict(:OrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
+cancelOrders.OrderId = limitOrders.OrderId[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId)]; cancelOrders.Volume = limitOrders.Volume[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId)]
 marketOrders.Side = limitOrders.Side[indexin(marketOrders.OrderId, limitOrders.OrderId)] # Extract MO contra side
+select!(limitOrders, Not(:ClientOrderId)); select!(cancelOrders, Not(:ClientOrderId))
+limitOrders.Type = fill(:LO, nrow(limitOrders)); cancelOrders.Type = fill(:OC, nrow(cancelOrders)); marketOrders.Type = fill(:MO, nrow(marketOrders))
 orders = outerjoin(limitOrders, marketOrders, on = [:OrderId, :DateTime, :Price, :Volume, :Type, :Side])
 sort!(orders, :DateTime)
 #---------------------------------------------------------------------------------------------------
-
+orders[1:9, :]
 #----- Supplementary functions -----#
 function MidPrice(bestBid::NamedTuple, bestAsk::NamedTuple)::Union{Missing, Float64}
     return (isempty(bestBid) || isempty(bestAsk)) ? missing : (bestBid.Price + bestAsk.Price) / 2
@@ -37,14 +40,15 @@ end
 
 #----- Clean raw data into L1LOB and OHLCV data -----#
 function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bool = false)
-    open("L1LOB.csv", "w") do file
+    open("Data/L1LOB.csv", "w") do file
         println(file, "DateTime,Price,Volume,Type,Side,MidPrice,MicroPrice,Spread")
         bids = Dict{Int64, Tuple{Int64, Int64}}(); asks = Dict{Int64, Tuple{Int64, Int64}}() # Both sides of the entire LOB are tracked with keys corresponding to orderIds
         bestBid = NamedTuple(); bestAsk = NamedTuple() # Current best bid/ask is stored in a tuple (Price, vector of Volumes, vector of OrderIds) and tracked
         animation = visualise ? Animation() : nothing
         Juno.progress() do id
-            count = 0
+            count = 1
             for line in eachrow(orders) # Iterate through all orders
+                #-- Limit Orders --#
                 if line.Type == :LO
                     if line.Side == :Buy # Buy limit order
                         if isempty(bids) || isempty(bestBid) # If the dictionary is empty, this order automatically becomes best
@@ -53,12 +57,9 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                             println(file, string(line.DateTime, ",", bestBid.Price, ",", bestBid.Volume, ",LO,1,", midPrice, ",", microPrice, ",", spread))
                         else # Otherwise find the best
                             if line.Price > bestBid.Price # Change best if price of current order better than the best
-                                # TODO: Handle the cleaning of crossed orders
-                                #=
-                                if line.Price >= bestAsk.Price # Bid crosses best ask => limit order becomes effective market order
-                                    allowCrossing ? continue : error("Negative spread - bid and ask have crossed at line " * string(count)) # Either disallow crossing or treat crossed order as effective market order (in which case ignore the limit order and only process subsequent market order)
+                                if !isempty(bestAsk) && line.Price >= bestAsk.Price # Bid crosses best ask => limit order becomes effective market order (to avoid an error first check if the otherside isn't empty)
+                                    allowCrossing ? (count += 1; continue) : error("Negative spread - bid and ask have crossed at line " * string(count)) # Either disallow crossing or treat crossed order as effective market order (in which case ignore the limit order and only process subsequent market order)
                                 end
-                                =#
                                 bestBid = (Price = line.Price, Volume = line.Volume, OrderId = [line.OrderId]) # New best is created
                                 midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
                                 println(file, string(line.DateTime, ",", bestBid.Price, ",", bestBid.Volume, ",LO,1,", midPrice, ",", microPrice, ",", spread))
@@ -76,16 +77,12 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                             println(file, string(line.DateTime, ",", bestAsk.Price, ",", bestAsk.Volume, ",LO,-1,", midPrice, ",", microPrice, ",", spread))
                         else # Otherwise find the best
                             if line.Price < bestAsk.Price # Change best if price of current order better than the best
-                                # TODO: Handle the cleaning of crossed orders
-                                #=
-                                if line.Price <= bestBid.Price # Ask crosses best bid => limit order becomes effective market order
-                                    allowCrossing ? continue : error("Negative spread - bid and ask have crossed at line " * string(count)) # Either disallow crossing or treat crossed order as effective market order (in which case ignore the limit order and only process subsequent market order)
+                                if !isempty(bestBid) && line.Price <= bestBid.Price # Ask crosses best bid => limit order becomes effective market order (to avoid an error first check if the otherside isn't empty)
+                                    allowCrossing ? (count += 1; continue) : error("Negative spread - bid and ask have crossed at line " * string(count)) # Either disallow crossing or treat crossed order as effective market order (in which case ignore the limit order and only process subsequent market order since trade is printed in Trades.csv and will be handled anyway)
                                 end
-                                =#
                                 bestAsk = (Price = line.Price, Volume = line.Volume, OrderId = [line.OrderId]) # New best is created
                                 midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
                                 println(file, string(line.DateTime, ",", bestAsk.Price, ",", bestAsk.Volume, ",LO,-1,", midPrice, ",", microPrice, ",", spread))
-                                ################## check if ask price is less than the best Bid. Implies limit order becomes effective market order (ignore thos order becasue the treade is printed in trades.csv and will be handled anyway)
                             elseif line.Price == bestAsk.Price # Add the new order's volume and orderid to the best if they have the same price
                                 bestAsk = (Price = bestAsk.Price, Volume = bestAsk.Volume + line.Volume, OrderId = vcat(bestAsk.OrderId, line.OrderId)) # Best is ammended by adding volume to best and appending the order id
                                 midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
@@ -94,7 +91,8 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                         end
                         push!(asks, line.OrderId => (line.Price, line.Volume)) # New order is pushed to LOB dictionary only after best is processed
                     end
-                else # Market order always affects the best
+                #-- Market Orders --#
+                elseif line.Type == :MO  # Market order always affects the best
                     if line.Side == :Buy # Trade was buyer-initiated (Sell MO)
                         contraOrder = bids[line.OrderId]
                         println(file, string(line.DateTime, ",", line.Price, ",", line.Volume, ",MO,-1,missing,missing,missing")) # Sell trade is printed
@@ -118,7 +116,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                         end
                         midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
                         !isempty(bestBid) ? println(file, string(line.DateTime, ",", bestBid.Price, ",", bestBid.Volume, ",LO,1,", midPrice, ",", microPrice, ",", spread)) : println(file, string(line.DateTime, ",missing,missing,LO,1,missing,missing,missing"))
-                    else # Trade was sell-initiated (Buy MO)
+                    else # Trade was seller-initiated (Buy MO)
                         contraOrder = asks[line.OrderId]
                         println(file, string(line.DateTime, ",", line.Price, ",", line.Volume, ",MO,1,missing,missing,missing")) # Buy trade is printed
                         if line.Volume == bestAsk.Volume # Trade filled best - remove from LOB, and update best
@@ -142,6 +140,51 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                         midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
                         !isempty(bestAsk) ? println(file, string(line.DateTime, ",", bestAsk.Price, ",", bestAsk.Volume, ",LO,-1,", midPrice, ",", microPrice, ",", spread)) : println(file, string(line.DateTime, ",missing,missing,LO,-1,missing,missing,missing"))
                     end
+                #-- Cancel Orders --#
+                else
+                    if line.Side == :Buy # Cancel buy limit order
+                        delete!(bids, line.OrderId) # Remove the order from the LOB
+                        if line.OrderId in bestBid.OrderId # Cancel hit the best
+                            activeL1Orders = setdiff(bestBid.OrderId, line.OrderId) # Find the remaining level 1 order ids
+                            if !isempty(activeL1Orders) # Cancel did not empty the best - remove order from best and update best
+                                bestBid = (Price = bestBid.Price, Volume = bestBid.Volume - line.Volume, OrderId = activeL1Orders)
+                                midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
+                                println(file, string(line.DateTime, ",", bestBid.Price, ",", bestBid.Volume, ",OC,1,", midPrice, ",", microPrice, ",", spread))
+                            else # Cancel emptied the best
+                                if !isempty(bids) # Orders still remain in the buy side LOB - update best
+                                    bestPrice = maximum(first.(collect(values(bids)))) # Find the new best price
+                                    indeces = findall(x -> first(x) == bestPrice, bids) # Find the order ids of the best
+                                    bestBid = (Price = bestPrice, Volume = sum(last(bids[i]) for i in indeces), OrderId = indeces) # Update the best
+                                    midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
+                                    println(file, string(line.DateTime, ",", bestBid.Price, ",", bestBid.Volume, ",OC,1,", midPrice, ",", microPrice, ",", spread))
+                                else # The buy side LOB was emptied - update best
+                                    bestBid = NamedTuple()
+                                    println(file, string(line.DateTime, ",missing,missing,OC,1,missing,missing,missing"))
+                                end
+                            end
+                        end
+                    else # Cancel sell limit order
+                        delete!(asks, line.OrderId) # Remove the order from the LOB
+                        if line.OrderId in bestAsk.OrderId # Cancel hit the best
+                            activeL1Orders = setdiff(bestAsk.OrderId, line.OrderId) # Find the remaining level 1 order ids
+                            if !isempty(activeL1Orders) # Cancel did not empty the best - remove order from best and update best
+                                bestAsk = (Price = bestAsk.Price, Volume = bestAsk.Volume - line.Volume, OrderId = activeL1Orders)
+                                midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
+                                println(file, string(line.DateTime, ",", bestAsk.Price, ",", bestAsk.Volume, ",OC,-1,", midPrice, ",", microPrice, ",", spread))
+                            else # Cancel emptied the best
+                                if !isempty(asks) # Orders still remain in the sell side LOB - update best
+                                    bestPrice = maximum(first.(collect(values(asks)))) # Find the new best price
+                                    indeces = findall(x -> first(x) == bestPrice, asks) # Find the order ids of the best
+                                    bestAsk = (Price = bestPrice, Volume = sum(last(asks[i]) for i in indeces), OrderId = indeces) # Update the best
+                                    midPrice = MidPrice(bestBid, bestAsk); microPrice = MicroPrice(bestBid, bestAsk); spread = Spread(bestBid, bestAsk)
+                                    println(file, string(line.DateTime, ",", bestAsk.Price, ",", bestAsk.Volume, ",OC,-1,", midPrice, ",", microPrice, ",", spread))
+                                else # The sell side LOB was emptied - update best
+                                    bestAsk = NamedTuple()
+                                    println(file, string(line.DateTime, ",missing,missing,OC,-1,missing,missing,missing"))
+                                end
+                            end
+                        end
+                    end
                 end
                 if visualise # Visualisation
                     PlotLOBSnapshot(bids, asks)
@@ -152,7 +195,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
             end
             visualise ? gif(animation, "LOB.gif", fps = 3) : nothing
         end
-        Juno.notification("Data cleaning complete"; kind = :Info, options = Dict(:dismissable => true))
+        Juno.notification("Data cleaning complete"; kind = :Info, options = Dict(:dismissable => false))
     end
 end
 function PlotLOBSnapshot(bids::Dict{Int64, Tuple{Int64, Int64}}, asks::Dict{Int64, Tuple{Int64, Int64}})
@@ -189,3 +232,4 @@ function OHLCV(orders, resolution)
     end
 end
 #---------------------------------------------------------------------------------------------------
+CleanData(orders, allowCrossing = true)
