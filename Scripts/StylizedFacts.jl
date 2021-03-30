@@ -13,7 +13,7 @@ StylizedFacts:
 TODO: Insert plot annotations for the values of α when fitting power laws
 =#
 using Distributions, CSV, Plots, DataFrames, StatsPlots, Dates, StatsBase, LaTeXStrings
-cd(@__DIR__); clearconsole()
+clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Log return sample distributions for different time resolutions -----#

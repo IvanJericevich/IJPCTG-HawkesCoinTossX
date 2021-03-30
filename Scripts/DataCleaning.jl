@@ -7,16 +7,15 @@ DataCleaning:
     1. Data preparation
     2. Supplementary functions
     3. Clean raw data into L1LOB and OHLCV data
-- TODO: Cancels may cancel the wrong order since orderIds do not correspond to limit orders, so include some checks to see if the orderId is present
-- TODO: Check if crossed limit order converted to trade is duplicated in OrdersSubmitted (i.e. 3 duplicates)
+- TODO: Check that cancel Ids are present in the LOB
 =#
 using CSV, DataFrames, Dates, Plots
 clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Data preparation -----#
-rawOrders = CSV.File("Data/OrdersSubmitted.csv", drop = [:SecurityId], types = Dict(:OrderId => Int64, :ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame |> x -> filter(y -> y.Price != 0, x)
-limitOrders = filter(x -> x.Volume != 0, rawOrders); cancelOrders = filter(x -> x.Volume == 0, rawOrders); marketOrders = CSV.File("Data/Trades.csv", types = Dict(:OrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
+rawOrders = CSV.File("Data/OrdersSubmitted_1.csv", drop = [:SecurityId], types = Dict(:OrderId => Int64, :ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame #|> x -> filter(y -> y.Price != 0, x)
+limitOrders = filter(x -> x.Volume != 0, rawOrders); cancelOrders = filter(x -> x.Volume == 0, rawOrders); marketOrders = CSV.File("Data/Trades_1.csv", types = Dict(:OrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
 cancelOrders.OrderId = limitOrders.OrderId[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId)]; cancelOrders.Volume = limitOrders.Volume[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId)]
 marketOrders.Side = limitOrders.Side[indexin(marketOrders.OrderId, limitOrders.OrderId)] # Extract MO contra side
 select!(limitOrders, Not(:ClientOrderId)); select!(cancelOrders, Not(:ClientOrderId))
@@ -24,7 +23,7 @@ limitOrders.Type = fill(:LO, nrow(limitOrders)); cancelOrders.Type = fill(:OC, n
 orders = outerjoin(limitOrders, marketOrders, on = [:OrderId, :DateTime, :Price, :Volume, :Type, :Side])
 sort!(orders, :DateTime)
 #---------------------------------------------------------------------------------------------------
-orders[1:9, :]
+
 #----- Supplementary functions -----#
 function MidPrice(bestBid::NamedTuple, bestAsk::NamedTuple)::Union{Missing, Float64}
     return (isempty(bestBid) || isempty(bestAsk)) ? missing : (bestBid.Price + bestAsk.Price) / 2
@@ -40,7 +39,7 @@ end
 
 #----- Clean raw data into L1LOB and OHLCV data -----#
 function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bool = false)
-    open("Data/L1LOB.csv", "w") do file
+    open("Data/Model1L1LOB.csv", "w") do file
         println(file, "DateTime,Price,Volume,Type,Side,MidPrice,MicroPrice,Spread")
         bids = Dict{Int64, Tuple{Int64, Int64}}(); asks = Dict{Int64, Tuple{Int64, Int64}}() # Both sides of the entire LOB are tracked with keys corresponding to orderIds
         bestBid = NamedTuple(); bestAsk = NamedTuple() # Current best bid/ask is stored in a tuple (Price, vector of Volumes, vector of OrderIds) and tracked
@@ -232,4 +231,4 @@ function OHLCV(orders, resolution)
     end
 end
 #---------------------------------------------------------------------------------------------------
-CleanData(orders, allowCrossing = true)
+CleanData(orders, allowCrossing = false)

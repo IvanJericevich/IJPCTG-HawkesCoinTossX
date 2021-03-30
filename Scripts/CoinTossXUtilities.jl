@@ -18,7 +18,6 @@ CoinTossXUtilities:
 =#
 using JavaCall
 import JavaCall: iterator
-#cd(@__DIR__); clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Initialise Java Virtual Machine with required byte code paths -----#
