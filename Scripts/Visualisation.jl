@@ -12,10 +12,10 @@ clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Data preparation -----#
-limitOrders = CSV.File("Data/OrdersSubmitted_1.csv", drop = [:SecurityId, :OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame |> x -> filter(y -> y.Price != 0, x)
-marketOrders = CSV.File("Data/Trades_1.csv", drop = [:OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
+limitOrders = CSV.File("Data/OrdersSubmitted_2.csv", drop = [:SecurityId, :OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame |> x -> filter(y -> y.Price != 0, x)
+marketOrders = CSV.File("Data/Trades_2.csv", drop = [:OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
 marketOrders.ContraSide = limitOrders.Side[indexin(marketOrders.ClientOrderId, limitOrders.ClientOrderId)] # Extract MO contra side
-l1lob = CSV.File("Data/L1LOB.csv", types = Dict(:DateTime => DateTime, :Price => Int64, :Volume => Int64, :Type => Symbol, :Side => Int64, :MidPrice => Float64, :MicroPrice => Float64, :Spread => Float64), missingstring = "missing") |> DataFrame |> x -> filter(y -> !ismissing(y.MidPrice), x)
+l1lob = CSV.File("Data/Model2L1LOB.csv", types = Dict(:DateTime => DateTime, :Price => Int64, :Volume => Int64, :Type => Symbol, :Side => Int64, :MidPrice => Float64, :MicroPrice => Float64, :Spread => Float64), missingstring = "missing") |> DataFrame |> x -> filter(y -> !ismissing(y.MidPrice), x)
 #---------------------------------------------------------------------------------------------------
 
 #----- Plot simulation results -----#
@@ -30,5 +30,5 @@ plot!(bubblePlot, Time.(cancelAsks.DateTime), cancelAsks.Price, seriestype = :sc
 plot!(bubblePlot, Time.(cancelBids.DateTime), cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
 plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MidPrice, seriestype = :line, linecolor = :black, label = "Mid-price")
 plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
-savefig(bubblePlot, "Figures/Model1BubblePlot.pdf")
+savefig(bubblePlot, "Figures/Model2BubblePlot.pdf")
 #---------------------------------------------------------------------------------------------------

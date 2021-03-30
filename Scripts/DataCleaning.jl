@@ -14,13 +14,13 @@ clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Data preparation -----#
-rawOrders = CSV.File("Data/OrdersSubmitted_1.csv", drop = [:SecurityId], types = Dict(:OrderId => Int64, :ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame #|> x -> filter(y -> y.Price != 0, x)
-limitOrders = filter(x -> x.Volume != 0, rawOrders); cancelOrders = filter(x -> x.Volume == 0, rawOrders); marketOrders = CSV.File("Data/Trades_1.csv", types = Dict(:OrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
-cancelOrders.OrderId = limitOrders.OrderId[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId)]; cancelOrders.Volume = limitOrders.Volume[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId)]
-marketOrders.Side = limitOrders.Side[indexin(marketOrders.OrderId, limitOrders.OrderId)] # Extract MO contra side
-select!(limitOrders, Not(:ClientOrderId)); select!(cancelOrders, Not(:ClientOrderId))
+rawOrders = CSV.File("Data/OrdersSubmitted_2.csv", drop = [:SecurityId, :OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame |> x -> filter(y -> y.Price != 0, x)
+limitOrders = filter(x -> x.ClientOrderId > 0, rawOrders); cancelOrders = filter(x -> x.ClientOrderId < 0, rawOrders); marketOrders = CSV.File("Data/Trades_2.csv", drop = [:OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
+cancelOrders.ClientOrderId .*= -1; cancelOrders[:, [:Price, :Volume]] = limitOrders[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId), [:Price, :Volume]]
+marketOrders.Side = limitOrders.Side[indexin(marketOrders.ClientOrderId, limitOrders.ClientOrderId)] # Extract MO contra side
 limitOrders.Type = fill(:LO, nrow(limitOrders)); cancelOrders.Type = fill(:OC, nrow(cancelOrders)); marketOrders.Type = fill(:MO, nrow(marketOrders))
-orders = outerjoin(limitOrders, marketOrders, on = [:OrderId, :DateTime, :Price, :Volume, :Type, :Side])
+orders = outerjoin(limitOrders, marketOrders, on = [:ClientOrderId, :DateTime, :Price, :Volume, :Type, :Side])
+rename!(orders, :ClientOrderId => :OrderId)
 sort!(orders, :DateTime)
 #---------------------------------------------------------------------------------------------------
 
@@ -32,7 +32,6 @@ function MicroPrice(bestBid::NamedTuple, bestAsk::NamedTuple)::Union{Missing, Fl
     return (isempty(bestBid) || isempty(bestAsk)) ? missing : (bestBid.Price * bestBid.Volume + bestAsk.Price * bestAsk.Volume) / (bestBid.Volume + bestAsk.Volume)
 end
 function Spread(bestBid::NamedTuple, bestAsk::NamedTuple)::Union{Missing, Float64}
-    # return 2 * abs(best - midPrice)
     return (isempty(bestBid) || isempty(bestAsk)) ? missing : abs(bestBid.Price - bestAsk.Price)
 end
 #---------------------------------------------------------------------------------------------------
@@ -94,6 +93,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                 elseif line.Type == :MO  # Market order always affects the best
                     if line.Side == :Buy # Trade was buyer-initiated (Sell MO)
                         contraOrder = bids[line.OrderId]
+                        # contraOrder = haskey(bids, line.OrderId) ? bids[line.OrderId] : bids[maximum(keys(bids))] # REVIEW: If the OrderId references itself then a Null Pointer will occur, so set the contraOrder to the price-time priority best (clientOrderId is in the same order as time)
                         println(file, string(line.DateTime, ",", line.Price, ",", line.Volume, ",MO,-1,missing,missing,missing")) # Sell trade is printed
                         if line.Volume == bestBid.Volume # Trade filled best - remove from LOB, and update best
                             delete!(bids, line.OrderId) # Remove the order from the LOB
@@ -117,6 +117,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                         !isempty(bestBid) ? println(file, string(line.DateTime, ",", bestBid.Price, ",", bestBid.Volume, ",LO,1,", midPrice, ",", microPrice, ",", spread)) : println(file, string(line.DateTime, ",missing,missing,LO,1,missing,missing,missing"))
                     else # Trade was seller-initiated (Buy MO)
                         contraOrder = asks[line.OrderId]
+                        # contraOrder = haskey(asks, line.OrderId) ? asks[line.OrderId] : asks[maximum(keys(asks))] # REVIEW: If the OrderId references itself then a Null Pointer will occur, so set the contraOrder to the price-time priority best (clientOrderId is in the same order as time)
                         println(file, string(line.DateTime, ",", line.Price, ",", line.Volume, ",MO,1,missing,missing,missing")) # Buy trade is printed
                         if line.Volume == bestAsk.Volume # Trade filled best - remove from LOB, and update best
                             delete!(asks, line.OrderId) # Remove the order from the LOB
@@ -231,4 +232,4 @@ function OHLCV(orders, resolution)
     end
 end
 #---------------------------------------------------------------------------------------------------
-CleanData(orders, allowCrossing = false)
+CleanData(orders, allowCrossing = true)
