@@ -86,12 +86,6 @@ function InjectSimulation(arrivals; seed = 1)
     StartJVM()
     client = Login(1, 1)
     try # This ensures that the client gets logged out whether an error occurs or not
-        SubmitOrder(client, Order("1", "Buy", "Limit", round(Int, RPareto(20, 1)[1]), 45))
-        SubmitOrder(client, Order("2", "Buy", "Limit", round(Int, RPareto(20, 1)[1]), 45))
-        SubmitOrder(client, Order("3", "Buy", "Limit", round(Int, RPareto(20, 1)[1]), 44))
-        SubmitOrder(client, Order("4", "Sell", "Limit", round(Int, RPareto(20, 1)[1]), 50))
-        SubmitOrder(client, Order("5", "Sell", "Limit", round(Int, RPareto(20, 1)[1]), 50))
-        SubmitOrder(client, Order("6", "Sell", "Limit", round(Int, RPareto(20, 1)[1]), 51))
         SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", arrivals.Volume[1], 51))
         arrivals.arrivalTime = arrivals.DateTime .+ Time(now())
         Juno.progress() do id # Progress bar
@@ -104,7 +98,7 @@ function InjectSimulation(arrivals; seed = 1)
                     limitOrder = arrivals[i, :]
                     price = SetLimitPrice(limitOrder, bestBid, bestAsk)
                     limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
-                    SubmitOrder(client, Order(arrivals.OrderId[i], arrivals.Side[i], "Limit", arrivals.Volume[i], price))
+                    SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
                     marketOrder = arrivals[i, :]
                     marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
@@ -168,14 +162,17 @@ Random.seed!(5)
 λ₀ = [0.01; 0.01; 0.02; 0.02; 0.02; 0.02; 0.015; 0.015; 0.015; 0.015]
 β  = fill(0.2, 10, 10)
 α  = [repeat([0.01], 10)'; repeat([0.01], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)']
-arrivals = ThinningSimulation(λ₀, α, β, 400; seed = 5) |> x -> DataFrame(DateTime = map(t -> Millisecond(round(Int, t * 1000)), reduce(vcat, x)),Type = reduce(vcat, fill.([:MO, :MO, :LO, :LO, :LO, :LO, :OC, :OC, :OC, :OC], length.(x))), Side = reduce(vcat, fill.(["Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell"], length.(x))),
-OrderId = vcat(string.(6 .+ collect(1:sum(length.(x[1:6])))), fill("0", sum(length.(x[7:10])))), Volume = round.(Int, vcat(RPareto(20, 1.5, sum(length.(x[1:2]))), RPareto(20, 1, sum(length.(x[3:6]))), fill(0, sum(length.(x[7:10]))))),
-Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, false, true, true], length.(x))))
+arrivals = ThinningSimulation(λ₀, α, β, 300; seed = 5) |> x -> DataFrame(DateTime = map(t -> Millisecond(round(Int, t * 1000)), reduce(vcat, x)),Type = reduce(vcat, fill.([:MO, :MO, :LO, :LO, :LO, :LO, :OC, :OC, :OC, :OC], length.(x))), Side = reduce(vcat, fill.(["Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell"], length.(x))),
+Volume = round.(Int, vcat(RPareto(20, 1.5, sum(length.(x[1:2]))), RPareto(20, 1, sum(length.(x[3:6]))), fill(0, sum(length.(x[7:10]))))), Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, false, true, true], length.(x))))
 sort!(arrivals, :DateTime)
-arrivals.DateTime .-= arrivals.DateTime[1]
 delete!(arrivals, 1)
+arrivals.DateTime .-= arrivals.DateTime[1]
+indeces = findall(x -> x < Millisecond(10), diff(arrivals.DateTime))
+delete!(arrivals, indeces .+ 1)
+arrivals.OrderId = string.(collect(1:nrow(arrivals)))
 InjectSimulation(arrivals, seed = 5)
 #---------------------------------------------------------------------------------------------------
+
 #=
 reduceLiquid = 0; increaseLiquid = 0
 for event in [3; 4; 5; 6]
