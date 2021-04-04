@@ -55,6 +55,7 @@ end
 
 #----- Clean raw data into L1LOB and OHLCV data -----#
 function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bool = false)
+    filter!(x -> x.Type != :WalkingMO, orders)
     open("Data/Model2L1LOB.csv", "w") do file
         println(file, "DateTime,Price,Volume,Type,Side,MidPrice,MicroPrice,Spread")
         bids = Dict{Int64, Tuple{Int64, Int64}}(); asks = Dict{Int64, Tuple{Int64, Int64}}() # Both sides of the entire LOB are tracked with keys corresponding to orderIds
@@ -272,12 +273,12 @@ function VisualiseSimulation(orders::DataFrame, l1lob::String, scale::Int64)
     filter!(x -> x.Type != :WalkingMO, orders)
     l1lob = CSV.File(string("Data/", l1lob, ".csv"), types = Dict(:Type => Symbol), missingstring = "missing") |> DataFrame #> x -> filter(y -> !ismissing(y.MidPrice), x)
     asks = filter(x -> x.Type == :LO && x.Side == :Sell, orders); bids = filter(x -> x.Type == :LO && x.Side == :Buy, orders)
-    sells = filter(x -> x.Type == :MO && x.Side == :Buy, orders); buys = filter(x -> x.Type == :MO && x.Side == :Sell, orders)
+    sells = filter(x -> x.Type == :MO && x.Side == :Buy, orders); buys = filter(x -> x.Type == :MO && x.Side == :Sell, orders) # scale * (asks.Volume / mean(asks.Volume))
     cancelAsks = filter(x -> x.Type == :OC && x.Side == :Sell, orders); cancelBids = filter(x -> x.Type == :OC && x.Side == :Buy, orders)
-    bubblePlot = plot(Time.(asks.DateTime), asks.Price, seriestype = :scatter, marker = (:red, stroke(:red), scale * (asks.Volume / mean(asks.Volume)), 0.7), label = "Ask (LO)", xlabel = "Time", ylabel = "Price (ticks)", legend = :topleft, legendfontsize = 5, xrotation = 30)
-    plot!(bubblePlot, Time.(bids.DateTime), bids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), scale * (bids.Volume / mean(bids.Volume)), 0.7), label = "Bid (LO)")
-    plot!(bubblePlot, Time.(sells.DateTime), sells.Price, seriestype = :scatter, marker = (:red, stroke(:red), :utriangle, scale * (sells.Volume / mean(sells.Volume)), 0.7), label = "Sell (MO)")
-    plot!(bubblePlot, Time.(buys.DateTime), buys.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :utriangle, scale * (buys.Volume / mean(buys.Volume)), 0.7), label = "Buy (MO)")
+    bubblePlot = plot(Time.(asks.DateTime), asks.Price, seriestype = :scatter, marker = (:red, stroke(:red), 0.7), label = "Ask (LO)", xlabel = "Time", ylabel = "Price (ticks)", legend = :topleft, legendfontsize = 5, xrotation = 30)
+    plot!(bubblePlot, Time.(bids.DateTime), bids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), 0.7), label = "Bid (LO)")
+    plot!(bubblePlot, Time.(sells.DateTime), sells.Price, seriestype = :scatter, marker = (:red, stroke(:red), :utriangle, 0.7), label = "Sell (MO)")
+    plot!(bubblePlot, Time.(buys.DateTime), buys.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :utriangle, 0.7), label = "Buy (MO)")
     plot!(bubblePlot, Time.(cancelAsks.DateTime), cancelAsks.Price, seriestype = :scatter, marker = (:red, stroke(:red), :xcross, 0.7), label = "Cancel Ask (LO)")
     plot!(bubblePlot, Time.(cancelBids.DateTime), cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
     plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MidPrice, seriestype = :line, linecolor = :black, label = "Mid-price")
@@ -288,7 +289,8 @@ end
 
 #----- Classify orders into their Hawkes event types -----#
 function ClassifyHawkesEvents(orders::DataFrame; allowCrossing = false)
-    data = DataFrame(Time = Vector{Time}(), Type = Vector{Symbol}(), Side = Vector{Symbol}(), IsAggressive = Vector{Bool}())
+    startTime = Time(orders.DateTime[1])
+    data = DataFrame(Time = Vector{Millisecond}(), Type = Vector{Symbol}(), Side = Vector{Symbol}(), IsAggressive = Vector{Bool}())
     bids = Dict{Int64, Tuple{Int64, Int64}}(); asks = Dict{Int64, Tuple{Int64, Int64}}() # Both sides of the entire LOB are tracked with keys corresponding to orderIds
     bestBid = NamedTuple(); bestAsk = NamedTuple() # Current best bid/ask is stored in a tuple (Price, vector of Volumes, vector of OrderIds) and tracked
     Juno.progress() do id
@@ -298,54 +300,54 @@ function ClassifyHawkesEvents(orders::DataFrame; allowCrossing = false)
             if order.Type == :LO
                 if order.Side == :Buy # Buy limit order
                     if isempty(bids) || isempty(bestBid) # If the dictionary is empty, this order automatically becomes best
-                        push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                        push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                         bestBid = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created
                     else # Otherwise find the best
                         if order.Price > bestBid.Price # Change best if price of current order better than the best
-                            push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                            push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                             if !isempty(bestAsk) && order.Price >= bestAsk.Price # Bid crosses best ask => limit order becomes effective market order (to avoid an error first check if the otherside isn't empty)
                                 allowCrossing ? println(string("Order ", order.OrderId, " crossed the spread")) : error("Negative spread - bid has crossed ask at order " * string(order.OrderId)) # Either disallow crossing or treat crossed order as effective market order (in which case ignore the limit order and only process subsequent market order)
                             else
                                 bestBid = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created
                             end
                         elseif order.Price == bestBid.Price # Add the new order's volume and orderid to the best if they have the same price
-                            push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                            push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                             bestBid = (Price = bestBid.Price, Volume = bestBid.Volume + order.Volume, OrderId = vcat(bestBid.OrderId, order.OrderId)) # Best is ammended by adding volume to best and appending the order id
                         else
-                            push!(data, (Time(order.DateTime), order.Type, order.Side, false))
+                            push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, false))
                         end # Otherwise the L1LOB hasn't changed so do nothing
                     end
                     push!(bids, order.OrderId => (order.Price, order.Volume)) # New order is always pushed to LOB dictionary only after best is processed
                 else # Sell limit order
                     if isempty(asks) || isempty(bestAsk) # If the dictionary is empty, this order automatically becomes best
-                        push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                        push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                         bestAsk = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created
                     else # Otherwise find the best
                         if order.Price < bestAsk.Price # Change best if price of current order better than the best
-                            push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                            push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                             if !isempty(bestBid) && order.Price <= bestBid.Price # Ask crosses best bid => limit order becomes effective market order (to avoid an error first check if the otherside isn't empty)
                                 allowCrossing ? (println(string("Order ", order.OrderId, " crossed the spread")); continue) : error("Negative spread - ask has crossed bid at order " * string(order.OrderId)) # Either disallow crossing or treat crossed order as effective market order (in which case ignore the limit order and only process subsequent market order since trade is printed in Trades.csv and will be handled anyway)
                             else
                                 bestAsk = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created
                             end
                         elseif order.Price == bestAsk.Price # Add the new order's volume and orderid to the best if they have the same price
-                            push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                            push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                             bestAsk = (Price = bestAsk.Price, Volume = bestAsk.Volume + order.Volume, OrderId = vcat(bestAsk.OrderId, order.OrderId)) # Best is ammended by adding volume to best and appending the order id
                         else
-                            push!(data, (Time(order.DateTime), order.Type, order.Side, false))
+                            push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, false))
                         end # Otherwise the L1LOB hasn't changed so do nothing
                     end
                     push!(asks, order.OrderId => (order.Price, order.Volume)) # New order is always pushed to LOB dictionary only after best is processed
                 end
             #-- Full Market Orders --#
         elseif order.Type == :WalkingMO
-                push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
             #-- Cancel Orders --#
         elseif order.Type == :OC
                 if order.Side == :Buy # Cancel buy limit order
                     delete!(bids, order.OrderId) # Remove the order from the LOB
                     if order.OrderId in bestBid.OrderId # Cancel hit the best
-                        push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                        push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                         activeL1Orders = setdiff(bestBid.OrderId, order.OrderId) # Find the remaining level 1 order ids
                         if !isempty(activeL1Orders) # Cancel did not empty the best - remove order from best and update best
                             bestBid = (Price = bestBid.Price, Volume = bestBid.Volume - order.Volume, OrderId = activeL1Orders)
@@ -359,12 +361,12 @@ function ClassifyHawkesEvents(orders::DataFrame; allowCrossing = false)
                             end
                         end
                     else
-                        push!(data, (Time(order.DateTime), order.Type, order.Side, false))
+                        push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, false))
                     end
                 else # Cancel sell limit order
                     delete!(asks, order.OrderId) # Remove the order from the LOB
                     if order.OrderId in bestAsk.OrderId # Cancel hit the best
-                        push!(data, (Time(order.DateTime), order.Type, order.Side, true))
+                        push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, true))
                         activeL1Orders = setdiff(bestAsk.OrderId, order.OrderId) # Find the remaining level 1 order ids
                         if !isempty(activeL1Orders) # Cancel did not empty the best - remove order from best and update best
                             bestAsk = (Price = bestAsk.Price, Volume = bestAsk.Volume - order.Volume, OrderId = activeL1Orders)
@@ -378,7 +380,7 @@ function ClassifyHawkesEvents(orders::DataFrame; allowCrossing = false)
                             end
                         end
                     else
-                        push!(data, (Time(order.DateTime), order.Type, order.Side, false))
+                        push!(data, (Time(order.DateTime) - startTime, order.Type, order.Side, false))
                     end
                 end
             #-- Split Market Orders --#
@@ -441,7 +443,7 @@ function ClassifyHawkesEvents(orders::DataFrame; allowCrossing = false)
                     end
                 end
             end
-            @info "Cleaning:" progress=(i / nrow(orders)) _id=id # Update progress
+            @info "Classifying:" progress=(i / nrow(orders)) _id=id # Update progress
         end
     end
     Juno.notification("Hawkes events classification complete"; kind = :Info, options = Dict(:dismissable => false))

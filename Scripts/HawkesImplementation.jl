@@ -18,22 +18,22 @@ HawkesImplementation:
     Main thing to check here is that our parameters result in a relatively balanced system where the number of events reducing the liquidity is roughly the same as the
     number of events increasing the liquidity i.e. ∑(3+4+5+6) ≈ ∑(1+2+7+8+9+10). The event counts of these should be roughly the same.
 =#
-using DataFrames, Dates, Optim, HypothesisTests
+using DataFrames, Dates, Optim#, HypothesisTests
 clearconsole()
-include("Scripts/Hawkes.jl")
-include("Scripts/DataCleaning.jl")
-include("Scripts/CoinTossXUtilities.jl")
+include("Hawkes.jl")
+include("DataCleaning.jl")
+include("CoinTossXUtilities.jl")
 function RPareto(xn, α, n = 1)
     return xn ./ (rand(n) .^ (1 / α))
 end
 #---------------------------------------------------------------------------------------------------
 
-#----- Implementation -----#
+#----- Simulation -----#
 Random.seed!(5)
 λ₀ = [0.01; 0.01; 0.02; 0.02; 0.02; 0.02; 0.015; 0.015; 0.015; 0.015]
+α = reduce(hcat, fill(λ₀, 10)) # α  = [repeat([0.01], 10)'; repeat([0.01], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)']
 β  = fill(0.2, 10, 10)
-α  = [repeat([0.01], 10)'; repeat([0.01], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)']
-arrivals = ThinningSimulation(λ₀, α, β, 300; seed = 5) |> x -> DataFrame(DateTime = map(t -> Millisecond(round(Int, t * 1000)), reduce(vcat, x)),Type = reduce(vcat, fill.([:MO, :MO, :LO, :LO, :LO, :LO, :OC, :OC, :OC, :OC], length.(x))), Side = reduce(vcat, fill.(["Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell"], length.(x))),
+arrivals = ThinningSimulation(λ₀, α, β, 1000; seed = 5) |> x -> DataFrame(DateTime = map(t -> Millisecond(round(Int, t * 1000)), reduce(vcat, x)),Type = reduce(vcat, fill.([:MO, :MO, :LO, :LO, :LO, :LO, :OC, :OC, :OC, :OC], length.(x))), Side = reduce(vcat, fill.(["Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell"], length.(x))),
 Volume = round.(Int, vcat(RPareto(20, 1.5, sum(length.(x[1:2]))), RPareto(20, 1, sum(length.(x[3:6]))), fill(0, sum(length.(x[7:10]))))), Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, false, true, true], length.(x))))
 sort!(arrivals, :DateTime)
 delete!(arrivals, 1)
@@ -42,6 +42,42 @@ indeces = findall(x -> x < Millisecond(10), diff(arrivals.DateTime))
 delete!(arrivals, indeces .+ 1)
 arrivals.OrderId = string.(collect(1:nrow(arrivals)))
 InjectSimulation(arrivals, seed = 5)
+#---------------------------------------------------------------------------------------------------
+
+#----- Hawkes Recalibration -----#
+events = [(:WalkingMO, :Buy, true), (:WalkingMO, :Sell, true), (:LO, :Buy, true), (:LO, :Sell, true), (:LO, :Buy, false), (:LO, :Sell, false), (:OC, :Buy, true), (:OC, :Sell, true), (:OC, :Buy, false), (:OC, :Sell, false)]
+data = PrepareData("OrdersSubmitted_2", "Trades_2") |> x -> ClassifyHawkesEvents(x) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> Dates.value.(collect(z[event].Time)), events)
+initialSolution = vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1)))
+logLikelihood = TwiceDifferentiable(θ -> Calibrate(θ, data, 300, 10), initialSolution, autodiff = :forward)
+@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true))
+#=
+open("Parameters.txt", "w") do file
+    for p in exp.(Optim.minimizer(calibratedParameters))
+        println(file, p)
+    end
+end
+=#
+#---------------------------------------------------------------------------------------------------
+
+#----- Hawkes calibration validation -----#
+#=
+for i in 1:length(events)
+    # QQ-plots
+    integratedIntensities = Λ(i, θ[1], θ[2], θ[3], simulatedArrivals)
+    qqPlot = qqplot(Exponential(1), integratedIntensities, xlabel = "Exponential theoretical quantiles", ylabel = "Sample quantiles", title = titles[i], markersize = 3, linecolor = :black, markercolor = col[i], markerstrokecolor = col[i], legend = false)
+    savefig(qqPlot, string("LBFGS/QQPlot - ", events[i][1], ".pdf"))
+    # Independence plots
+    Uᵢ = cdf.(Exponential(1), integratedIntensities)[1:(end - 1)] # diff(simulatedArrivals[i])
+    Uᵢ₊₁ = cdf.(Exponential(1), integratedIntensities)[2:end]
+    independencePlot = plot(Uᵢ, Uᵢ₊₁, seriestype = :scatter, markersize = 3, markercolor = col[i], markerstrokecolor = col[i], title = titles[i], legend = false) # , xlabel = L"U_k = F_{Exp(1)}(t_k - t_{k - 1})", ylabel = L"U_{k + 1} = F_{Exp(1)}(t_{k + 1} - t_k)"
+    savefig(independencePlot, string("LBFGS/Independence Plot - ", events[i][1], ".pdf"))
+    # Statistical tests
+    LBTest = LjungBoxTest(integratedIntensities, 20, 3) # Ljung-Box - H_0 = independent
+    println(file, string(events[i][1], "-LB,", round(LBTest.Q, digits = 5), ",", round(pvalue(LBTest), digits = 5)))
+    KSTest = ExactOneSampleKSTest(integratedIntensities, Exponential(1)) # KS - H_0 = exponential
+    println(file, string(events[i][1], "-KS,", round(KSTest.δ, digits = 4), ",", round(pvalue(KSTest), digits = 4)))
+end
+=#
 #---------------------------------------------------------------------------------------------------
 
 #----- Model 1 -----#
@@ -173,38 +209,6 @@ function SetLimitPrice(limitOrder, bestBid, bestAsk)
     return price
 end
 #---------------------------------------------------------------------------------------------------
-
-#----- Hawkes Recalibration -----#
-data = PrepareData("OrdersSubmitted_2", "Trades_2") |> x -> ClassifyHawkesEvents(x)
-initialSolution =
-logLikelihood = TwiceDifferentiable(θ -> CallibrateHawkes(θ, data), initialSolution, autodiff = :forward)
-@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true))
-open("Parameters - LBFGS.txt", "w") do file
-    for p in exp.(Optim.minimizer(callibratedParameters))
-        println(file, p)
-    end
-end
-#---------------------------------------------------------------------------------------------------
-
-#----- Hawkes calibration validation -----#
-for i in 1:length(events)
-    # QQ-plots
-    integratedIntensities = integratedIntensities = Λ(i, θ[1], θ[2], θ[3], simulatedArrivals)
-    qqPlot = qqplot(Exponential(1), integratedIntensities, xlabel = "Exponential theoretical quantiles", ylabel = "Sample quantiles", title = titles[i], markersize = 3, linecolor = :black, markercolor = col[i], markerstrokecolor = col[i], legend = false)
-    savefig(qqPlot, string("LBFGS/QQPlot - ", events[i][1], ".pdf"))
-    # Independence plots
-    Uᵢ = cdf.(Exponential(1), integratedIntensities)[1:(end - 1)] # diff(simulatedArrivals[i])
-    Uᵢ₊₁ = cdf.(Exponential(1), integratedIntensities)[2:end]
-    independencePlot = plot(Uᵢ, Uᵢ₊₁, seriestype = :scatter, markersize = 3, markercolor = col[i], markerstrokecolor = col[i], title = titles[i], legend = false) # , xlabel = L"U_k = F_{Exp(1)}(t_k - t_{k - 1})", ylabel = L"U_{k + 1} = F_{Exp(1)}(t_{k + 1} - t_k)"
-    savefig(independencePlot, string("LBFGS/Independence Plot - ", events[i][1], ".pdf"))
-    # Statistical tests
-    LBTest = LjungBoxTest(integratedIntensities, 20, 3) # Ljung-Box - H_0 = independent
-    println(file, string(events[i][1], "-LB,", round(LBTest.Q, digits = 5), ",", round(pvalue(LBTest), digits = 5)))
-    KSTest = ExactOneSampleKSTest(integratedIntensities, Exponential(1)) # KS - H_0 = exponential
-    println(file, string(events[i][1], "-KS,", round(KSTest.δ, digits = 4), ",", round(pvalue(KSTest), digits = 4)))
-end
-#---------------------------------------------------------------------------------------------------
-
 
 #=
 reduceLiquid = 0; increaseLiquid = 0
