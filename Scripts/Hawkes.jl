@@ -10,10 +10,11 @@ Hawkes
 	4. Recursive relation
 	5. Integrated intensity
 	6. Log-likelihood objective
-	7. Generalised residuals
-	8. Hawkes moments
-	9. Method of moments objective
-	10. Calibration
+	7. Hawkes moments
+	8. Method of moments objective
+	9. Calibration
+	10. Generalised residuals
+	11. Validation plots and statistics
 - Symbols:
 	α = DxD matrix of excitations
     β = DxD matrix of rates of decay
@@ -24,9 +25,9 @@ Hawkes
     τ = Inter-arrival time sampled/obtained from the inverse transform method
     Γ = Spectral radius to check stability conditions of the process
     λ_star = The cummulative value of the intensity of all processes
-- TODO: Consider exponentiation of paramaters in calibration to have log interpretation
+- TODO: Implement GPU parallel processing
 =#
-using Random, LinearAlgebra
+using Random, LinearAlgebra#, LaTeXStrings
 #---------------------------------------------------------------------------------------------------
 
 #----- Supplementary functions -----#
@@ -60,7 +61,7 @@ end
 
 #----- Simulation by thinning -----#
 # Returns vectors of sampled times from the multivariate D-type Hawkes process
-function ThinningSimulation(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Real; seed::Int64 = 1)
+function ThinningSimulation(λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Int64; seed::Int64 = 1)
     Random.seed!(seed)
     SpectralRadius(α, β)
     # Initialization
@@ -115,7 +116,7 @@ end
 
 #----- Intensity path -----#
 # Extract the Intensity fuction given the simulation paths
-function Intensity(m::Int64, time::Vector{Float64}, history::Vector{Vector{Int64}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2})
+function Intensity(m::Int64, time::Vector{Type}, history::Vector{Vector{Type}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}) where Type <: Real
     λ = fill(λ₀[m], length(time))
     dimension = length(λ₀)
     for t in 1:length(time)
@@ -133,10 +134,10 @@ end
 
 #----- Recursive relation -----#
 # Supporting function to calculate the recursive function R^{ij}(l) in the loglikelihood for a multivariate Hawkes process (Toke-Pomponio (2011) - Modelling Trades-Through in a Limited Order-Book)
-function R(history::Vector{Vector{<:Real}}, β::Array{<:Real, 2}, i::Int64, j::Int64)
+function R(history::Vector{Vector{Type}}, β::Array{Type, 2}, i::Int64, j::Int64) where Type <: Real
     tⁱ = vcat([0.0], history[i]); tʲ = history[j]
     N = length(tⁱ)
-    Rⁱᴶ = zeros(Real, N)
+    Rⁱᴶ = zeros(Type, N)
     for n in 2:N
         if i == j
             Rⁱᴶ[n] = exp(- β[i, j] * (tⁱ[n] - tⁱ[n - 1])) * (1 + Rⁱᴶ[n - 1])
@@ -151,7 +152,7 @@ end
 
 #----- Integrated intensity -----#
 # Function to compute the integrated intensity from [0,T] ∫_0^T λ^m(t) dt in the loglikelihood for a multivariate Hawkes process
-function Λ(history::Vector{Vector{<:Real}}, T::Int64, λ₀::Vector{<:Real}, α::Array{<:Real, 2}, β::Array{<:Real, 2}, m::Int64)
+function Λ(history::Vector{Vector{Type}}, T::Int64, λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, m::Int64) where Type <: Real
     Λ = λ₀[m] * T
     dimension = length(λ₀)
     for j in 1:dimension
@@ -169,12 +170,12 @@ end
 
 #----- Log-likelihood objective -----#
 # Computes the partial log-likelihoods and sums them up to obtain the full log-likelihood
-function LogLikelihood(history::Vector{Vector{<:Real}}, λ₀::Vector{<:Real}, α::Array{<:Real, 2}, β::Array{<:Real, 2}, T::Int64)
+function LogLikelihood(history::Vector{Vector{Type}}, λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
     dimension = length(λ₀)
-    loglikelihood = Vector(undef, dimension)
+    loglikelihood = Vector{Type}(undef, dimension)
     for m in 1:dimension
         loglikelihood[m] = T - Λ(history, T, λ₀, α, β, m)
-        Rⁱᴶ = zeros(Real, length(history[m]), dimension)
+        Rⁱᴶ = zeros(Type, length(history[m]), dimension)
         for j in 1:dimension
             Rⁱᴶ[:, j] = R(history, β, m, j)
         end
@@ -184,24 +185,12 @@ function LogLikelihood(history::Vector{Vector{<:Real}}, λ₀::Vector{<:Real}, �
 end
 #---------------------------------------------------------------------------------------------------
 
-#----- Generalised residuals -----#
-function GeneralisedResiduals(history::Vector{Vector{Int64}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2})
-    dimension = length(λ₀)
-    GE = [Vector{Float64}() for _ in 1:dimension]
-    for m in 1:dimension # Loop through each dimension
-		integratedIntensity = map(t -> Λ(history, t, λ₀, α, β, m), history[m]) # Loop through the observations in each process
-		GE[m] = diff(integratedIntensity) # Compute the error
-    end
-    return GE
-end
-#---------------------------------------------------------------------------------------------------
-
 #----- Hawkes moments -----#
 # Functions for calculating the moments of a multivariate Hawkes process
-function JumpMean(λ₀::Vector{<:Real}, α::Array{<:Real, 2}, β::Array{<:Real, 2}, T::Int64)
+function JumpMean(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
     return ((inv(β - α) * β) * λ₀) .* T
 end
-function JumpVariance(λ₀::Vector{<:Real}, α::Array{<:Real, 2}, β::Array{<:Real, 2}, T::Int64)
+function JumpVariance(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
 	stationaryRegimeExpectedIntensity = (inv(β - α) * β) * λ₀
 	lambdaInfinity = lyap(α - β, (α * Diagonal(stationaryRegimeExpectedIntensity)) * transpose(α))
 	inverseAlphaMinusBeta = inv(α - β)
@@ -210,7 +199,7 @@ function JumpVariance(λ₀::Vector{<:Real}, α::Array{<:Real, 2}, β::Array{<:R
 	term3 = term2 * (lambdaInfinity + (α * Diagonal(stationaryRegimeExpectedIntensity)))
 	return term3 + transpose(term3) + (Diagonal(stationaryRegimeExpectedIntensity) .* T)
 end
-function JumpAutocorrelation(λ₀::Vector{<:Real}, α::Array{<:Real, 2}, β::Array{<:Real, 2}, T::Int64, lag::Int64)
+function JumpAutocorrelation(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64, lag::Int64) where Type <: Real
 	dimension = length(λ₀)
 	jumpVariance = JumpVariance(λ₀, α, β, T)
 	stationaryRegimeExpectedIntensity = (inv(β - α) * β) * λ₀
@@ -230,7 +219,7 @@ end
 
 #----- Method of moments objective -----#
 # Function to calculate the sum-of-squares of deviations of theoretical moments from empirical moments
-function ΣSquaredMomentDeviations(λ₀::Vector{Real}, α::Array{Real, 2}, β::Array{Real, 2}, T::Real, empiricalMoments::Vector{Float64})
+function ΣSquaredMomentDeviations(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64, empiricalMoments::Vector{Float64}) where Type <: Real
 	theoreticalMoments = vcat(JumpMean(λ₀, α, β, T), reduce(vcat, JumpVariance(λ₀, α, β, T)), reduce(vcat, JumpAutocorrelation(λ₀, α, β, T, 1)))
 	return transpose(1 .- (theoreticalMoments ./ empiricalMoments)) * I * (1 .- (theoreticalMoments ./ empiricalMoments))
 end
@@ -238,14 +227,13 @@ end
 
 #----- Calibration -----#
 # Functions to be used in the optimization routine (the below objectives should be minimized)
-function Calibrate(θ::Vector{<:Real}, history::Vector{Vector{<:Real}}, T::Int64, dimension::Int64) # Maximum likelihood estimation
+function Calibrate(θ::Vector{Type}, history::Vector{Vector{Type}}, T::Int64, dimension::Int64) where Type <: Real # Maximum likelihood estimation
     λ₀ = θ[1:dimension]
     α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
     β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
     return -LogLikelihood(history, λ₀, α, β, T)
 end
-function Calibrate(θ::Vector{<:Real}, empiricalMoments::Vector{<:Real}, T::Real) # Method of moments estimation
-    dimension = Int(round(sqrt(length(θ) + 1) - 1))
+function Calibrate(θ::Vector{Type}, empiricalMoments::Vector{Float64}, T::Int64, dimension::Int64) where Type <: Real # Method of moments estimation
     λ₀ = θ[1:dimension]
     α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
     β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
@@ -253,5 +241,39 @@ function Calibrate(θ::Vector{<:Real}, empiricalMoments::Vector{<:Real}, T::Real
 end
 #---------------------------------------------------------------------------------------------------
 
-#----- Validation -----#
+#----- Generalised residuals -----#
+function GeneralisedResiduals(history::Vector{Vector{Type}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}) where Type <: Real
+    dimension = length(λ₀)
+    GE = [Vector{Float64}() for _ in 1:dimension]
+    for m in 1:dimension # Loop through each dimension
+		integratedIntensity = map(t -> Λ(history, t, λ₀, α, β, m), history[m]) # Loop through the observations in each process
+		GE[m] = diff(integratedIntensity) # Compute the error
+    end
+    return GE
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Validation plots and statistics -----#
+#=
+function Validate(simulation::Vector{Vector{Type}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Int64; format::String = "pdf") where Type <: Real
+	titles = ["BuyMO", "SellMO", "AggressiveBuyLO", "AggressiveSellLO", "PassiveBuyLO", "PassiveSellLO", "AggressiveBuyOC", "AggressiveSellOC", "PassiveBuyOC", "PassiveSellOC"]
+	colors = [:red, :firebrick, :blue, :deepskyblue, :green, :seagreen, :purple, :mediumpurple, :yellow, :black]
+	dimension = length(λ₀)
+	for m in 1:dimension
+		integratedIntensities = Λ(simulation, T, λ₀, α, β, m)
+		# QQ plots
+	    qqPlot = qqplot(Exponential(1), integratedIntensities, xlabel = "Exponential theoretical quantiles", ylabel = "Sample quantiles", title = titles[m], marker = (3, colors[m], stroke(colors[m])), linecolor = :black, legend = false)
+	    savefig(qqPlot, string("Figures/QQPlot", titles[m], ".", format))
+		# Independence plots
+		Uᵢ = cdf.(Exponential(1), integratedIntensities)[1:(end - 1)]
+        Uᵢ₊₁ = cdf.(Exponential(1), integratedIntensities)[2:end]
+        independencePlot = plot(Uᵢ, Uᵢ₊₁, seriestype = :scatter, marker = (3, colors[m], colors[m]), title = titles[m], xlabel = L"U_k = F_{Exp(1)}(t_k - t_{k - 1})", ylabel = L"U_{k + 1} = F_{Exp(1)}(t_{k + 1} - t_k)", legend = false)
+        savefig(independencePlot, string("Figures/IndependencePlot", titles[m], ".", format))
+		# Statistical tests
+        LBTest = LjungBoxTest(integratedIntensities, 20, 3) # Ljung-Box - H_0 = independent
+		KSTest = ExactOneSampleKSTest(integratedIntensities, Exponential(1)) # KS - H_0 = exponential
+        println(string(titles[m], "|", "LjungBox:Q=", round(LBTest.Q, digits = 5), ",p=", round(pvalue(LBTest), digits = 5), "|", "KolmogorovSmirnov:δ=", round(KSTest.δ, digits = 4), ",p=", round(pvalue(KSTest), digits = 4)))
+	end
+end
+=#
 #---------------------------------------------------------------------------------------------------

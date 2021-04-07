@@ -9,16 +9,22 @@ StylizedFacts:
     3. Trade sign autocorrealtion
     4. Trade inter-arrival time distribution
     5. Extreme log-return percentile distribution for different time resolutions
-    6. Intraday statistics
+    6. Price Impact
+- Examples
+    LogReturnDistribution(:TickbyTick; lobFile = "Model2L1LOB", format = "png")
+    LogReturnAutocorrelation(50, lobFile = "Model2L1LOB", format = "png")
+    TradeSignAutocorrelation(20, lobFile = "Model2L1LOB", format = "png")
+    InterArrivalTimeDistribution("Model2L1LOB"; format = "png")
+    ExtremeLogReturnPercentileDistribution(:TickbyTick, :Upper; lobFile = "Model2L1LOB", format = "png")
 - TODO: Insert plot annotations for the values of α when fitting power laws and excess kurtosis
 - TODO: Change font sizes
+- TODO: Code up price impact and master curves
 =#
 using Distributions, CSV, Plots, DataFrames, StatsPlots, Dates, StatsBase, LaTeXStrings
 clearconsole()
 #---------------------------------------------------------------------------------------------------
 
 #----- Log return sample distributions for different time resolutions -----#
-LogReturnDistribution(:TickbyTick; lobFile = "Model2L1LOB")
 function LogReturnDistribution(resolution::Symbol; lobFile::String, cummulative::Bool = false, format::String = "pdf")
     # Obtain log-returns of price series
     data = resolution == :TickbyTick ? CSV.File(string("Data/", lobFile, ".csv"), missingstring = "missing") |> DataFrame : CSV.File(string("Data/MicroPrice ", resolution, " Bars.csv"), missingstring = "missing")
@@ -30,21 +36,20 @@ function LogReturnDistribution(resolution::Symbol; lobFile::String, cummulative:
         empiricalDistribution = bar(logReturns, func = cdf, fillcolor = :blue, linecolor = :blue, xlabel = "Log returns", ylabel = "Density", label = "Empirical", legendtitle = "Distribution")
         # Plot fitted theoretical distributions
         plot!(empiricalDistribution, cdf(theoreticalDistribution, logReturns), linecolor = :black, label = "Fitted Normal")
-        savefig(empiricalDistribution, string("Log-Return Cummulative Distribution - ", resolution, ".", format))
+        savefig(empiricalDistribution, string("Log-ReturnCummulativeDistribution", resolution, ".", format))
     else
         # Plot empirical distribution
         empiricalDistribution = histogram(logReturns, normalize = :pdf, fillcolor = :blue, linecolor = :blue, xlabel = "Log returns", ylabel = "Density", label = "Empirical", legendtitle = "Empirical Distribution", legend = :bottomright)
         # Plot fitted theoretical distributions
-        #plot!(empiricalDistribution, [theoreticalDistribution1, theoreticalDistribution2], linecolor = [:green :purple], label = ["Fitted Normal" "Fitted Inverse Gaussian"])
+        # plot!(empiricalDistribution, [theoreticalDistribution1, theoreticalDistribution2], linecolor = [:green :purple], label = ["Fitted Normal" "Fitted Inverse Gaussian"])
         plot!(empiricalDistribution, theoreticalDistribution, linecolor = :black, label = "Fitted Normal")
         qqplot!(empiricalDistribution, Normal, logReturns, xlabel = "Normal theoretical quantiles", ylabel = "Sample quantiles", linecolor = :black, marker = (:blue, stroke(:blue)), legend = false, inset = (1, bbox(0.6, 0.1, 0.33, 0.33, :top)), subplot = 2)
-        savefig(empiricalDistribution, string("Figures/Log-Return Distribution - ", resolution, ".", format))
+        savefig(empiricalDistribution, string("Figures/Log-ReturnDistribution", resolution, ".", format))
     end
 end
 #---------------------------------------------------------------------------------------------------
 
 #----- Log-return and absolute log-return autocorrelation -----#
-LogReturnAutocorrelation(50, lobFile = "Model2L1LOB")
 function LogReturnAutocorrelation(lag::Int64; lobFile::String, format::String = "pdf")
     # Obtain log-returns
     data = CSV.File(string("Data/", lobFile, ".csv"), missingstring = "missing") |> DataFrame
@@ -56,12 +61,11 @@ function LogReturnAutocorrelation(lag::Int64; lobFile::String, format::String = 
     autoCorrPlot = plot(autoCorr, seriestype = :sticks, linecolor = :blue, legend = false, xlabel = "Lag", ylabel = "Autocorrelation")
     plot!(autoCorrPlot, [1.96 / sqrt(length(logReturns)), -1.96 / sqrt(length(logReturns))], seriestype = :hline, line = (:dash, :black, 1))
     plot!(autoCorrPlot, absAutoCorr, seriestype = :sticks, linecolor = :blue, legend = false, xlabel = "Lag", ylabel = "Autocorrelation", inset = (1, bbox(0.62, 0.55, 0.33, 0.33, :top)), subplot = 2)
-    savefig(autoCorrPlot, "Figures/Log-Return Autocorrelation." * format)
+    savefig(autoCorrPlot, "Figures/Log-ReturnAutocorrelation." * format)
 end
 #---------------------------------------------------------------------------------------------------
 
 #----- Trade sign autocorrealtion -----#
-TradeSignAutocorrelation(20, lobFile = "Model2L1LOB")
 function TradeSignAutocorrelation(lag::Int64; lobFile::String, format::String = "pdf")
     # Extract trade signs
     data = CSV.File(string("Data/", lobFile, ".csv"), missingstring = "missing") |> DataFrame
@@ -72,7 +76,7 @@ function TradeSignAutocorrelation(lag::Int64; lobFile::String, format::String = 
     autoCorrPlot = plot(autoCorr, seriestype = :sticks, linecolor = :blue, legend = false, xlabel = "Lag", ylabel = "Autocorrelation")
     plot!(autoCorrPlot, [quantile(Normal(), (1 + 0.95) / 2) / sqrt(length(tradeSigns)), quantile(Normal(), (1 - 0.95) / 2) / sqrt(length(tradeSigns))], seriestype = :hline, line = (:dash, :black, 1))
     plot!(autoCorrPlot, autoCorr, xscale = :log10, inset = (1, bbox(0.58, 0.0, 0.4, 0.4)), subplot = 2, legend = false, xlabel = "Lag " * L"(\log_{10})", ylabel = "Autocorrelation", linecolor = :black)
-    savefig(autoCorrPlot, "Figures/Trade-Sign Autocorrelation." * format)
+    savefig(autoCorrPlot, "Figures/Trade-SignAutocorrelation." * format)
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -93,12 +97,11 @@ function InterArrivalTimeDistribution(lobFile::String; format::String = "pdf")
     logDistribution = histogram(interArrivals, normalize = :pdf, linecolor = :blue, fillcolor = :blue, yscale = :log10, xlabel = "Inter-arrival time (milliseconds)", ylabel = "Log Density", annotations = (3, y[3], Plots.text(string("α=" α), :left)), legend = false)
     plot!(logDistribution, [theoreticalDistribution1, theoreticalDistribution2, theoreticalDistribution3], linecolor = [:green :purple], label = ["Fitted Exponential" "Fitted Weibull" "Fitted Log-Normal"])
     plot!(logDistribution, [theoreticalQuantiles theoreticalQuantiles], [interArrivals theoreticalQuantiles], seriestype = [:scatter :line], inset = (1, bbox(0.6, 0.03, 0.34, 0.34, :top)), subplot = 2, legend = :none, xlabel = "Power-Law Theoretical Quantiles", ylabel = "Sample Quantiles", linecolor = :black, markercolor = :blue, markerstrokecolor = :blue, scale = :log10)
-    savefig(logDistribution, "Trade Log-Inter-Arrival Distribution." * format)
+    savefig(logDistribution, "TradeLog-Inter-ArrivalDistribution." * format)
 end
 #---------------------------------------------------------------------------------------------------
 
 #----- Extreme log-return percentile distribution for different time resolutions -----#
-ExtremeLogReturnPercentileDistribution(:TickbyTick, :Upper; lobFile = "Model2L1LOB", format::String = "pdf")
 function ExtremeLogReturnPercentileDistribution(resolution::Symbol, side::Symbol; lobFile::String, format::String = "pdf")
     # Obtain log-returns of price series
     if resolution == :TickbyTick
@@ -118,6 +121,40 @@ function ExtremeLogReturnPercentileDistribution(resolution::Symbol, side::Symbol
     # Plot
     extremePercentileDistributionPlot = plot(observations, normalize = :pdf, linecolor = :blue, xlabel = string("Log return Extreme", side, " percentiles"), ylabel = "Density", legend = false)#, annotations = (3, y[3], Plots.text(string("α=" α), :left))))
     plot!(extremePercentileDistributionPlot, [theoreticalQuantiles theoreticalQuantiles], [observations theoreticalQuantiles], seriestype = [:scatter :line], inset = (1, bbox(0.6, 0.03, 0.34, 0.34, :top)), subplot = 2, legend = :none, xlabel = "Power-Law Theoretical Quantiles", ylabel = "Sample Quantiles", linecolor = :black, markercolor = :blue, markerstrokecolor = :blue, scale = :log10)
-    savefig(extremePercentileDistributionPlot, string("Figures/Extreme", side, " Log-Return Percentiles Distribution - ", resolution,".", format))
+    savefig(extremePercentileDistributionPlot, string("Figures/Extreme", side, "Log-ReturnPercentilesDistribution", resolution,".", format))
 end
+#---------------------------------------------------------------------------------------------------
+
+#----- Price Impact -----#
+function PriceImpact(files::Vector{String})
+    data = Dict(i => (CSV.File(string("Data/", files[i], ".csv"), types = Dict(:Type => Symbol), missingstring = "missing") |> DataFrame) for i in 1:length(files))
+    tradeIndeces = [Vector{Int64}() for _ in 1:length(files)]; totalTradeCount = 0; dailyValue = zeros(Int64, length(files)) # Initialization
+    for (k, v) in data
+        tradeIndeces[k] = findall(x -> x == :MO, v.Type)
+        totalTradeCount += length(tradeIndeces[k])
+        dailyValue[k] = sum(v.Price[tradeIndeces[k]] * v.Volume[tradeIndeces[k]])
+    end
+    averageDailyValue = mean(dailyValue)
+    buyerInitiated = DataFrame(Impact = Vector{Float64}(), NormalizedVolume = Vector{Float64}()); sellerInitiated = DataFrame(Impact = Vector{Float64}(), NormalizedVolume = Vector{Float64}())
+    for (k, v) in data
+        dayVolume = sum(v.Volume[tradeIndeces[k]])
+        for index in tradeIndeces[k]
+            midPriceBeforeTrade = data.MidPrice[index - 1]; midPriceAfterTrade = data.MidPrice[index + 1]
+            Δp = log(midPriceAfterTrade) - log(midPriceBeforeTrade)
+            ω = (data.Volume[index] / dayVolume) * (totalTradeCount / length(files))
+            data.Side == -1 ? push!(buyerInitiated, (Δp, ω)) : push!(sellerInitiated, (Δp, ω))
+        end
+    return buyerInitiated, sellerInitiated, averageDailyValue
+end
+#=
+function PlotPriceImpact(data::DataFrame)
+    ω = zeros(Float64, 21); Δp = zeros(Float64, 21)
+    volumeBins = 10 .^ (range(-3, 1, length = 21))
+    for i in 2:length(volumeBins)
+        binIndeces = findall(x -> volumeBins[i - 1] < x <= x[i], data.NormalizedVolume)
+        ω[i - 1] = data.NormalizedVolume[binIndeces]; Δp[i - 1] = data.Impact[binIndeces]
+    end
+    plot(ω, Δp, seriestype = [:scatter, :line], scale = :log10, marker = (:blue, stroke(:blue)), linecolor = :blue, label = ["Stock 1" ""], xlabel = "\\omega", ylabel = "\\Delta p")
+end
+=#
 #---------------------------------------------------------------------------------------------------
