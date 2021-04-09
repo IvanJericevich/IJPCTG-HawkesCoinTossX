@@ -23,12 +23,11 @@ StylizedFacts:
 using Distributions, CSV, Plots, DataFrames, StatsPlots, Dates, StatsBase, LaTeXStrings
 clearconsole()
 #---------------------------------------------------------------------------------------------------
-
 #----- Log return sample distributions for different time resolutions -----#
 function LogReturnDistribution(resolution::Symbol; lobFile::String, cummulative::Bool = false, format::String = "pdf")
     # Obtain log-returns of price series
     data = resolution == :TickbyTick ? CSV.File(string("Data/", lobFile, ".csv"), missingstring = "missing") |> DataFrame : CSV.File(string("Data/MicroPrice ", resolution, " Bars.csv"), missingstring = "missing")
-    logReturns = resolution == :TickbyTick ? diff(log.(filter(x -> !ismissing(x), data[:, :MicroPrice]))) : diff(log.(filter(x -> !ismissing(x), data[:, :Close])))
+    logReturns = resolution == :TickbyTick ? diff(log.(filter(x -> !ismissing(x), data[:, :MidPrice]))) : diff(log.(filter(x -> !ismissing(x), data[:, :Close])))
     # Fit theoretical distributions
     theoreticalDistribution = fit(Normal, logReturns)
     if cummulative

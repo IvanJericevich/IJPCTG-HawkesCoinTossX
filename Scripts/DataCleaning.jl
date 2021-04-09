@@ -37,8 +37,7 @@ function PrepareData(ordersSubmitted::String, trades::String)
     limitOrders.Type[findall(x -> x == 0, limitOrders.Price)] .= :WalkingMO # Trades are included in the OrdersSubmitted file with their full (aggregated) volumes
     cancelOrders = filter(x -> x.ClientOrderId < 0, rawOrders) # Cancel orders have negative ID
     cancelOrders.ClientOrderId .*= -1 # Make cancel IDs positive again
-    cancelOrders.Type = fill(:OC, nrow(cancelOrders))
-    cancelOrders[:, [:Price, :Volume]] = limitOrders[indexin(cancelOrders.ClientOrderId, limitOrders.ClientOrderId), [:Price, :Volume]] # Associate order cancels with their corresponding LO volume and price to make cleaning easier
+    cancelOrders.Type = fill(:OC, nrow(cancelOrders)) # Note that you cannot associate cancels with their LO volumes since its possible for a trade to partially fill the LO before it is cancelled
     # Market orders
     marketOrders = CSV.File(string("Data/", trades, ".csv"), drop = [:OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
     marketOrders.Side = limitOrders.Side[indexin(marketOrders.ClientOrderId, limitOrders.ClientOrderId)] # Extract MO contra side
@@ -173,22 +172,15 @@ Output:
 function ProcessCancelOrder!(file, order, best, contraBest, lob, isAggressive, side)
     delete!(lob, order.OrderId) # Remove the order from the LOB
     if order.OrderId in best.OrderId # Cancel hit the best
-        activeL1Orders = setdiff(best.OrderId, order.OrderId) # Find the remaining level 1 order ids
-        if !isempty(activeL1Orders) # Cancel did not empty the best - remove order from best and update best
-            best = (Price = best.Price, Volume = best.Volume - order.Volume, OrderId = activeL1Orders)
+        if !isempty(lob) # Orders still remain in the LOB - find and update best
+            bestPrice = side * maximum(side .* first.(collect(values(lob)))) # Find the new best price (bid => side == 1 so find max price) (ask => side == -1 so find min price)
+            indeces = [k for (k,v) in lob if first(v) == bestPrice] # Find the order ids of the best
+            best = (Price = bestPrice, Volume = sum(last(lob[i]) for i in indeces), OrderId = indeces) # Update the best
             midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
             println(file, string(order.DateTime, ",", best.Price, ",", best.Volume, ",OC,", side, ",", midPrice, ",", microPrice, ",", spread))
-        else # Cancel emptied the best
-            if !isempty(lob) # Orders still remain in the buy side LOB - update best
-                bestPrice = side * maximum(side .* first.(collect(values(lob)))) # Find the new best price (bid => side == 1 so find max price) (ask => side == -1 so find min price)
-                indeces = [k for (k,v) in lob if first(v) == bestPrice] # Find the order ids of the best
-                best = (Price = bestPrice, Volume = sum(last(lob[i]) for i in indeces), OrderId = indeces) # Update the best
-                midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
-                println(file, string(order.DateTime, ",", best.Price, ",", best.Volume, ",OC,", side, ",", midPrice, ",", microPrice, ",", spread))
-            else # The buy side LOB was emptied - update best
-                best = NamedTuple()
-                println(file, string(order.DateTime, ",missing,missing,OC,", side, ",missing,missing,missing"))
-            end
+        else # The buy side LOB was emptied - update best
+            best = NamedTuple()
+            println(file, string(order.DateTime, ",missing,missing,OC,", side, ",missing,missing,missing"))
         end
         push!(isAggressive, true)
     else # OC did not hit best
@@ -325,7 +317,7 @@ end
 #----- Plot simulation results -----#
 function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf")
     filter!(x -> x.Type != :WalkingMO, orders)
-    l1lob = CSV.File(string("Data/", l1lob, ".csv"), types = Dict(:Type => Symbol), missingstring = "missing") |> DataFrame #|> x -> filter(y -> !ismissing(y.MidPrice), x)
+    l1lob = CSV.File(string("Data/", l1lob, ".csv"), types = Dict(:Type => Symbol), missingstring = "missing") |> DataFrame |> x -> filter(y -> x.Type != :MO && x.Type != :EMO, x) # Filter out trades from L1LOB since their mid-prices are missing
     asks = filter(x -> x.Type == :LO && x.Side == :Sell, orders); bids = filter(x -> x.Type == :LO && x.Side == :Buy, orders)
     sells = filter(x -> x.Type == :MO && x.Side == :Buy, orders); buys = filter(x -> x.Type == :MO && x.Side == :Sell, orders) # scale * (asks.Volume / mean(asks.Volume))
     cancelAsks = filter(x -> x.Type == :OC && x.Side == :Sell, orders); cancelBids = filter(x -> x.Type == :OC && x.Side == :Buy, orders)
@@ -336,7 +328,7 @@ function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf")
     plot!(bubblePlot, Time.(cancelAsks.DateTime), cancelAsks.Price, seriestype = :scatter, marker = (:red, stroke(:red), :xcross, 0.7), label = "Cancel Ask (LO)")
     plot!(bubblePlot, Time.(cancelBids.DateTime), cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
     plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MidPrice, seriestype = :steppre, linecolor = :black, label = "Mid-price")
-    #plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
+    plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
     savefig(bubblePlot, "Figures/BubblePlot." * format)
 end
 #---------------------------------------------------------------------------------------------------

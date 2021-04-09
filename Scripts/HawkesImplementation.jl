@@ -18,7 +18,7 @@ HawkesImplementation:
     Main thing to check here is that our parameters result in a relatively balanced system where the number of events reducing the liquidity is roughly the same as the
     number of events increasing the liquidity i.e. ∑(3+4+5+6) ≈ ∑(1+2+7+8+9+10). The event counts of these should be roughly the same.
 =#
-using DataFrames, Dates, Optim
+using DataFrames, Dates#, CSV#, Optim
 clearconsole()
 include(pwd() * "/Scripts/Hawkes.jl")
 include(pwd() * "/Scripts/DataCleaning.jl")
@@ -37,8 +37,9 @@ arrivals = ThinningSimulation(λ₀, α, β, 1000; seed = 5) |> x -> DataFrame(D
 Volume = round.(Int, vcat(RPareto(20, 1.5, sum(length.(x[1:2]))), RPareto(20, 1, sum(length.(x[3:6]))), fill(0, sum(length.(x[7:10]))))), Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, false, true, true], length.(x))))
 sort!(arrivals, :DateTime)
 delete!(arrivals, 1)
-arrivals.OrderId = string.(6 .+ collect(1:nrow(arrivals)))
+arrivals.OrderId = string.(collect(1:nrow(arrivals)))
 arrivals.DateTime .-= arrivals.DateTime[1]
+# arrivals.DateTime .÷= 2
 InjectSimulation(arrivals, seed = 5)
 #---------------------------------------------------------------------------------------------------
 
@@ -60,7 +61,6 @@ MAE = mean(abs.(exp.(Optim.minimizer(calibratedParameters)) - initialSolution))
 
 #----- Model 1 -----#
 function InjectSimulation(arrivals; seed = 1)
-    Random.seed!(seed)
     StartJVM()
     client = Login(1, 1)
     try # This ensures that the client gets logged out whether an error occurs or not
@@ -82,7 +82,7 @@ function InjectSimulation(arrivals; seed = 1)
                 end
                 if arrivals.Type[i] == :LO # Limit order
                     limitOrder = arrivals[i, :]
-                    price = SetLimitPrice(limitOrder, bestBid, bestAsk)
+                    price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
                     limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
@@ -94,12 +94,14 @@ function InjectSimulation(arrivals; seed = 1)
                     (LOBSnapshot, best) = cancelOrder.Side == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid, :Price)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask, :Price))
                     OrderIds = cancelOrder.Passive ? [k for (k,v) in LOBSnapshot if v.Price != best] : [k for (k,v) in LOBSnapshot if v.Price == best]
                     if !isempty(OrderIds)
+                        Random.seed!(seed)
                         orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
                         price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
                         cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
                         CancelOrder(client, orderId, cancelOrder.Side, price)
                     end
                 end
+                seed += 1 # Change seed for next iteration
                 @info "Trading" progress=(arrivals.DateTime[i] / arrivals.DateTime[end]) _id=id # Update progress
             end
         end
@@ -107,11 +109,13 @@ function InjectSimulation(arrivals; seed = 1)
         Logout(client)
     end
 end
-function SetLimitPrice(limitOrder, bestBid, bestAsk)
+function SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
+    spreadFailSafe = collect(1:10) # Vector of ticks from which to sample randomly
     if limitOrder.Side == "Buy" # Buy LO
         if limitOrder.Passive # Passive buy LO
             if bestAsk != 0 # If the ask side LOB is non-empty
-                price = bestBid != 0 ? bestBid - 1 : bestAsk - 5 # If the bid side is non empty place the price 1 tick below the best; otherwise place it 5 ticks below the best ask (since the best bid is zero)
+                Random.seed!(seed)
+                price = bestBid != 0 ? bestBid - 1 : bestAsk - rand(spreadFailSafe) # If the bid side is non empty place the price 1 tick below the best; otherwise place it random number ticks below the best ask (since the best bid is zero)
             else # If the ask side is empty (implies the bid side cannot be empty since an error would have thrown)
                 price = bestBid - 1 # Place price 1 tick below best
             end
@@ -119,13 +123,15 @@ function SetLimitPrice(limitOrder, bestBid, bestAsk)
             if bestBid != 0 # If the bid side LOB is non-empty
                 price = bestBid + 1 # Place price 1 tick above best bid even if spread = 1
             else # If the bid side is empty (implies the ask side cannot be empty)
-                price = bestAsk - 5 # Place price 5 ticks below best ask
+                Random.seed!(seed)
+                price = bestAsk - rand(spreadFailSafe) # Place price random number of ticks below best ask
             end
         end
     else # Sell LO
         if limitOrder.Passive # Passive sell LO
             if bestBid != 0 # If the bid side LOB is non-empty
-                price = bestAsk != 0 ? bestAsk + 1 : bestBid + 5 # If the ask side is non empty place the price 1 tick above the best; otherwise place it 5 ticks above the best bid (since the best ask is zero)
+                Random.seed!(seed)
+                price = bestAsk != 0 ? bestAsk + 1 : bestBid + rand(spreadFailSafe) # If the ask side is non empty place the price 1 tick above the best; otherwise place it random number of ticks above the best bid (since the best ask is zero)
             else # If the bid side is empty (implies the ask side cannot be empty since an error would have thrown)
                 price = bestAsk + 1 # Place price 1 tick above best
             end
@@ -133,7 +139,8 @@ function SetLimitPrice(limitOrder, bestBid, bestAsk)
             if bestAsk != 0 # If the ask side LOB is non-empty
                 price = bestAsk - 1 # Place price 1 tick below best ask even if spread = 1
             else # If the ask side is empty (implies the ask side cannot be empty)
-                price = bestBid + 5 # Place price 5 ticks abive best bid
+                Random.seed!(seed)
+                price = bestBid + rand(spreadFailSafe) # Place price random number of ticks above best bid
             end
         end
     end
@@ -143,7 +150,6 @@ end
 
 #----- Model 2 -----#
 function InjectSimulation(arrivals; seed = 1)
-    Random.seed!(seed)
     StartJVM()
     client = Login(1, 1)
     try # This ensures that the client gets logged out whether an error occurs or not
@@ -157,7 +163,7 @@ function InjectSimulation(arrivals; seed = 1)
                 end
                 if arrivals.Type[i] == :LO # Limit order
                     limitOrder = arrivals[i, :]
-                    price = SetLimitPrice(limitOrder, bestBid, bestAsk)
+                    price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
                     limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
@@ -169,12 +175,14 @@ function InjectSimulation(arrivals; seed = 1)
                     (LOBSnapshot, best) = arrivals.Side[i] == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid, :Price)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask, :Price))
                     OrderIds = cancelOrder.Passive ? [k for (k,v) in LOBSnapshot if v.Price != best] : [k for (k,v) in LOBSnapshot if v.Price == best]
                     if !isempty(OrderIds)
+                        Random.seed!(seed)
                         orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
                         price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
                         cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
                         CancelOrder(client, orderId, arrivals.Side[i], price)
                     end
                 end
+                seed += 1 # Change seed for next iteration
                 @info "Trading" progress=(arrivals.DateTime[i] / arrivals.DateTime[end]) _id=id # Update progress
             end
         end
@@ -182,11 +190,13 @@ function InjectSimulation(arrivals; seed = 1)
         Logout(client)
     end
 end
-function SetLimitPrice(limitOrder, bestBid, bestAsk)
+function SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
+    spreadFailSafe = collect(1:10) # Vector of ticks from which to sample randomly
     if limitOrder.Side == "Buy" # Buy LO
         if limitOrder.Passive # Passive buy LO
             if bestAsk != 0 # If the ask side LOB is non-empty
-                price = bestBid != 0 ? bestBid - 1 : bestAsk - 5 # If the bid side is non empty place the price 1 tick below the best; otherwise place it 5 ticks below the best ask (since the best bid is zero)
+                Random.seed!(seed)
+                price = bestBid != 0 ? bestBid - 1 : bestAsk - rand(spreadFailSafe) # If the bid side is non empty place the price 1 tick below the best; otherwise place it random number of ticks below the best ask (since the best bid is zero)
             else # If the ask side is empty (implies the bid side cannot be empty since an error would have thrown)
                 price = bestBid - 1 # Place price 1 tick below best
             end
@@ -195,13 +205,15 @@ function SetLimitPrice(limitOrder, bestBid, bestAsk)
                 spread = abs(bestAsk - bestBid)
                 price = spread > 1 ? bestBid + 1 : bestBid # If the spead is greater than 1 tick place price above best; otherwise place price at best (note that this still applies if bestAsk = 0)
             else # If the bid side is empty (implies the ask side cannot be empty)
-                price = bestAsk - 5 # Place price 5 ticks below best ask
+                Random.seed!(seed)
+                price = bestAsk - rand(spreadFailSafe) # Place price random number of ticks below best ask
             end
         end
     else # Sell LO
         if limitOrder.Passive # Passive sell LO
             if bestBid != 0 # If the bid side LOB is non-empty
-                price = bestAsk != 0 ? bestAsk + 1 : bestBid + 5 # If the ask side is non empty place the price 1 tick above the best; otherwise place it 5 ticks above the best bid (since the best ask is zero)
+                Random.seed!(seed)
+                price = bestAsk != 0 ? bestAsk + 1 : bestBid + rand(spreadFailSafe) # If the ask side is non empty place the price 1 tick above the best; otherwise place it random number of ticks above the best bid (since the best ask is zero)
             else # If the bid side is empty (implies the ask side cannot be empty since an error would have thrown)
                 price = bestAsk + 1 # Place price 1 tick above best
             end
@@ -210,7 +222,8 @@ function SetLimitPrice(limitOrder, bestBid, bestAsk)
                 spread = abs(bestAsk - bestBid)
                 price = spread > 1 ? bestAsk - 1 : bestAsk # If the spead is greater than 1 tick place price above best; otherwise place price at best (note that this still applies if bestBid = 0)
             else # If the ask side is empty (implies the ask side cannot be empty)
-                price = bestBid + 5 # Place price 5 ticks abive best bid
+                Random.seed!(seed)
+                price = bestBid + rand(spreadFailSafe) # Place price random number of ticks abive best bid
             end
         end
     end
