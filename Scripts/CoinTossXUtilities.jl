@@ -4,7 +4,7 @@ CoinTossXUtilities:
 - Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
 - Function: Provide the necessary functions for running simulations with CoinTossX
 - Structure:
-    1. Initialise Java Virtual Machine with required byte code paths
+    1. Build, deploy, start CoinTossX and initialise Java Virtual Machine with required byte code paths
     2. Order creation structure
     3. Agent structure
     4. Initialize client by logging in to the trading gateway and starting the trading session
@@ -15,17 +15,30 @@ CoinTossXUtilities:
     9. Receive snapshot of LOB
     10. Market data timeouts
     11. Destroy client by logging out and ending the trading session
+    12. Shutdown all components of CoinTossX
 =#
 using JavaCall
 import JavaCall: iterator
 #---------------------------------------------------------------------------------------------------
 
-#----- Initialise Java Virtual Machine with required byte code paths -----#
+#----- Build, deploy, start CoinTossX and initialise Java Virtual Machine with required byte code paths -----#
 function StartJVM()
     JavaCall.addClassPath("/home/ivanjericevich/CoinTossX/ClientSimulator/build/classes/main")
     JavaCall.addClassPath("/home/ivanjericevich/CoinTossX/ClientSimulator/build/install/ClientSimulator/lib/*.jar")
     JavaCall.init()
     Juno.notification("JVM started"; kind = :Info, options = Dict(:dismissable => false))
+end
+function StartCoinTossX()
+    cd("/home/ivanjericevich/CoinTossX")
+    run(`./gradlew -Penv=local build -x test`)
+    run(`./gradlew -Penv=local clean installDist bootWar copyResourcesToInstallDir copyToDeploy deployLocal`)
+    cd("/home/ivanjericevich/run/scripts")
+    run(`./startAll.sh`)
+    sleep(50)
+    JavaCall.addClassPath("/home/ivanjericevich/CoinTossX/ClientSimulator/build/classes/main")
+    JavaCall.addClassPath("/home/ivanjericevich/CoinTossX/ClientSimulator/build/install/ClientSimulator/lib/*.jar")
+    JavaCall.init()
+    Juno.notification("CoinTossX started"; kind = :Info, options = Dict(:dismissable => false))
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -149,8 +162,16 @@ end
 function Logout(client::Client)
     jcall(client.javaObject, "sendEndMessage", Nothing, ())
     jcall(client.javaObject, "close", Nothing, ())
-    #JavaCall.destroy()
-    #exit()
     Juno.notification("Logged out and trading session ended"; kind = :Info, options = Dict(:dismissable => false))
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Shutdown all components of CoinTossX -----#
+function StopCoinTossX()
+    sleep(10)
+    run(`./stopAll.sh`)
+    JavaCall.destroy()
+    exit()
+    Juno.notification("CoinTossX stopped"; kind = :Info, options = Dict(:dismissable => false))
 end
 #---------------------------------------------------------------------------------------------------
