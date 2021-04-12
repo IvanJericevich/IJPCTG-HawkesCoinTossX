@@ -134,7 +134,7 @@ end
 
 #----- Recursive relation -----#
 # Supporting function to calculate the recursive function R^{ij}(l) in the loglikelihood for a multivariate Hawkes process (Toke-Pomponio (2011) - Modelling Trades-Through in a Limited Order-Book)
-function R(history::Vector{Vector{Type}}, β::Array{Type, 2}, i::Int64, j::Int64) where Type <: Real
+function R(history::Vector{Vector{Float64}}, β::Array{Type, 2}, i::Int64, j::Int64) where Type <: Real
     tⁱ = vcat([0.0], history[i]); tʲ = history[j]
     N = length(tⁱ)
     Rⁱᴶ = zeros(Type, N)
@@ -152,7 +152,7 @@ end
 
 #----- Integrated intensity -----#
 # Function to compute the integrated intensity from [0,T] ∫_0^T λ^m(t) dt in the loglikelihood for a multivariate Hawkes process
-function Λ(history::Vector{Vector{Type}}, T::Int64, λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, m::Int64) where Type <: Real
+function Λ(history::Vector{Vector{Float64}}, T::Int64, λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, m::Int64) where Type <: Real
     Λ = λ₀[m] * T
     dimension = length(λ₀)
     for j in 1:dimension
@@ -170,7 +170,7 @@ end
 
 #----- Log-likelihood objective -----#
 # Computes the partial log-likelihoods and sums them up to obtain the full log-likelihood
-function LogLikelihood(history::Vector{Vector{Type}}, λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
+function LogLikelihood(history::Vector{Vector{Float64}}, λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
     dimension = length(λ₀)
     loglikelihood = Vector{Type}(undef, dimension)
     for m in 1:dimension
@@ -227,7 +227,7 @@ end
 
 #----- Calibration -----#
 # Functions to be used in the optimization routine (the below objectives should be minimized)
-function Calibrate(θ::Vector{Type}, history::Vector{Vector{Type}}, T::Int64, dimension::Int64) where Type <: Real # Maximum likelihood estimation
+function Calibrate(θ::Vector{Type}, history::Vector{Vector{Float64}}, T::Int64, dimension::Int64) where Type <: Real # Maximum likelihood estimation
     λ₀ = θ[1:dimension]
     α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
     β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)

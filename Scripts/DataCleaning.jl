@@ -30,7 +30,7 @@ Output:
     - TAQ data
 =#
 function PrepareData(ordersSubmitted::String, trades::String)
-    # Limtit and cancel orders
+    # Limit and cancel orders
     rawOrders = CSV.File(string("Data/", ordersSubmitted, ".csv"), drop = [:SecurityId, :OrderId], types = Dict(:ClientOrderId => Int64, :DateTime => DateTime, :Price => Int64, :Volume => Int64, :Side => Symbol), dateformat = "yyyy-mm-dd HH:MM:SS.s") |> DataFrame
     limitOrders = filter(x -> x.ClientOrderId > 0, rawOrders) # Limit orders have positive ID
     limitOrders.Type = fill(:LO, nrow(limitOrders))
@@ -69,7 +69,7 @@ Function:
     - Classify LO event as either aggressive or passive
     - Append mid-price, micro-price and spread info
 Arguments:
-    - file = output file
+    - file = output file to which L1LOB will be printed
     - order = order to be processed
     - best = best bid (ask) if bid (ask) LO
     - contraBest = best ask (bid) if ask (bid) LO
@@ -81,7 +81,7 @@ Output:
     - Best bid/ask
     - Order id of crossed order (if any)
 =#
-function ProcessLimitOrder!(file, order, best, contraBest, lob, isAggressive, side, allowCrossing)
+function ProcessLimitOrder!(file::IOStream, order::DataFrameRow, best::NamedTuple, contraBest::NamedTuple, lob::Dict{Int64, Tuple{Int64, Int64}}, isAggressive::Vector{Bool}, side::Int64, allowCrossing::Bool)
     crossedOrderId = nothing # Initialize. This resets when a new LO occurs
     if isempty(lob) || isempty(best) # If the dictionary is empty, this order automatically becomes best
         best = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created
@@ -119,7 +119,7 @@ Function:
     - Update LOB and best with MO
     - Append mid-price, micro-price and spread info
 Arguments:
-    - file = output file
+    - file = output file to which L1LOB will be printed
     - order = order to be processed
     - best = best bid (ask) if bid (ask) LO
     - contraBest = best ask (bid) if ask (bid) LO
@@ -129,7 +129,7 @@ Arguments:
 Output:
     - Best bid/ask
 =#
-function ProcessMarketOrder!(file, order, best, contraBest, lob, side)
+function ProcessMarketOrder!(file::IOStream, order::DataFrameRow, best::NamedTuple, contraBest::NamedTuple, lob::Dict{Int64, Tuple{Int64, Int64}}, side::Int64)
     contraOrder = lob[order.OrderId] # Extract order on contra side
     if order.Volume == best.Volume # Trade filled best - remove from LOB, and update best
         delete!(lob, order.OrderId) # Remove the order from the LOB
@@ -159,7 +159,7 @@ Function:
     - Classify OC event as either aggressive or passive
     - Append mid-price, micro-price and spread info
 Arguments:
-    - file = output file
+    - file = output file to which L1LOB will be printed
     - order = order to be processed
     - best = best bid (ask) if bid (ask) LO
     - contraBest = best ask (bid) if ask (bid) LO
@@ -169,7 +169,7 @@ Arguments:
 Output:
     - Best bid/ask
 =#
-function ProcessCancelOrder!(file, order, best, contraBest, lob, isAggressive, side)
+function ProcessCancelOrder!(file::IOStream, order::DataFrameRow, best::NamedTuple, contraBest::NamedTuple, lob::Dict{Int64, Tuple{Int64, Int64}}, isAggressive::Vector{Bool}, side::Int64)
     delete!(lob, order.OrderId) # Remove the order from the LOB
     if order.OrderId in best.OrderId # Cancel hit the best
         if !isempty(lob) # Orders still remain in the LOB - find and update best
@@ -193,7 +193,7 @@ Function:
     - Update LOB and best with effective MO. This requires us to aggress the order against both side of the LOB
     - Append mid-price, micro-price and spread info
 Arguments:
-    - file = output file
+    - file = output file to which L1LOB will be printed
     - order = order to be processed
     - best = best bid (ask) if bid (ask) LO
     - contraBest = best ask (bid) if ask (bid) LO
@@ -205,7 +205,7 @@ Output:
     - The order id of the crossed order if it hasn't been fully handled. Otherwise nothing
     - TODO: What about when the crossed order was partially filled and is the only order left in the side and then another standard trade occurs immediately after
 =#
-function ProcessEffectiveMarketOrder!(file, order, best, contraBest, lob, crossedOrderId, side)# Remove the executed quantity from the LO and push the remaining volume to the LOB
+function ProcessEffectiveMarketOrder!(file::IOStream, order::DataFrameRow, best::NamedTuple, contraBest::NamedTuple, lob::Dict{Int64, Tuple{Int64, Int64}}, crossedOrderId::Int64, side::Int64)# Remove the executed quantity from the LO and push the remaining volume to the LOB
     if order.Volume == best.Volume # Crossed LO was fully executed against contra side - remove from LOB, and update best. Note that all crossed orders will sit at the best
         delete!(lob, crossedOrderId) # Remove the order from the LOB
         if !isempty(lob) # If the LOB is non empty find the best
@@ -295,6 +295,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
     end
     Juno.notification("Data cleaning complete"; kind = :Info, options = Dict(:dismissable => false))
     orders.IsAggressive = isAggressive # Append classification to data
+    orders.DateTime = orders.DateTime .- orders.DateTime[1]
     return orders
 end
 function PlotLOBSnapshot(bids::Dict{Int64, Tuple{Int64, Int64}}, asks::Dict{Int64, Tuple{Int64, Int64}})

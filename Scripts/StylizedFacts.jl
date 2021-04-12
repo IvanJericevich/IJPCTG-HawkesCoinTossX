@@ -18,11 +18,11 @@ StylizedFacts:
     ExtremeLogReturnPercentileDistribution(:TickbyTick, :Upper; lobFile = "Model2L1LOB", format = "png")
 - TODO: Insert plot annotations for the values of α when fitting power laws and excess kurtosis
 - TODO: Change font sizes
-- TODO: Code up price impact and master curves
 =#
 using Distributions, CSV, Plots, DataFrames, StatsPlots, Dates, StatsBase, LaTeXStrings
 clearconsole()
 #---------------------------------------------------------------------------------------------------
+
 #----- Log return sample distributions for different time resolutions -----#
 function LogReturnDistribution(resolution::Symbol; lobFile::String, cummulative::Bool = false, format::String = "pdf")
     # Obtain log-returns of price series
@@ -122,38 +122,4 @@ function ExtremeLogReturnPercentileDistribution(resolution::Symbol, side::Symbol
     plot!(extremePercentileDistributionPlot, [theoreticalQuantiles theoreticalQuantiles], [observations theoreticalQuantiles], seriestype = [:scatter :line], inset = (1, bbox(0.6, 0.03, 0.34, 0.34, :top)), subplot = 2, legend = :none, xlabel = "Power-Law Theoretical Quantiles", ylabel = "Sample Quantiles", linecolor = :black, markercolor = :blue, markerstrokecolor = :blue, scale = :log10)
     savefig(extremePercentileDistributionPlot, string("Figures/Extreme", side, "Log-ReturnPercentilesDistribution", resolution,".", format))
 end
-#---------------------------------------------------------------------------------------------------
-
-#----- Price Impact -----#
-function PriceImpact(files::Vector{String})
-    data = Dict(i => (CSV.File(string("Data/", files[i], ".csv"), types = Dict(:Type => Symbol), missingstring = "missing") |> DataFrame) for i in 1:length(files))
-    tradeIndeces = [Vector{Int64}() for _ in 1:length(files)]; totalTradeCount = 0; dailyValue = zeros(Int64, length(files)) # Initialization
-    for (k, v) in data
-        tradeIndeces[k] = findall(x -> x == :MO, v.Type)
-        totalTradeCount += length(tradeIndeces[k])
-        dailyValue[k] = sum(v.Price[tradeIndeces[k]] * v.Volume[tradeIndeces[k]])
-    end
-    averageDailyValue = mean(dailyValue)
-    buyerInitiated = DataFrame(Impact = Vector{Float64}(), NormalizedVolume = Vector{Float64}()); sellerInitiated = DataFrame(Impact = Vector{Float64}(), NormalizedVolume = Vector{Float64}())
-    for (k, v) in data
-        dayVolume = sum(v.Volume[tradeIndeces[k]])
-        for index in tradeIndeces[k]
-            midPriceBeforeTrade = data.MidPrice[index - 1]; midPriceAfterTrade = data.MidPrice[index + 1]
-            Δp = log(midPriceAfterTrade) - log(midPriceBeforeTrade)
-            ω = (data.Volume[index] / dayVolume) * (totalTradeCount / length(files))
-            data.Side == -1 ? push!(buyerInitiated, (Δp, ω)) : push!(sellerInitiated, (Δp, ω))
-        end
-    return buyerInitiated, sellerInitiated, averageDailyValue
-end
-#=
-function PlotPriceImpact(data::DataFrame)
-    ω = zeros(Float64, 21); Δp = zeros(Float64, 21)
-    volumeBins = 10 .^ (range(-3, 1, length = 21))
-    for i in 2:length(volumeBins)
-        binIndeces = findall(x -> volumeBins[i - 1] < x <= x[i], data.NormalizedVolume)
-        ω[i - 1] = data.NormalizedVolume[binIndeces]; Δp[i - 1] = data.Impact[binIndeces]
-    end
-    plot(ω, Δp, seriestype = [:scatter, :line], scale = :log10, marker = (:blue, stroke(:blue)), linecolor = :blue, label = ["Stock 1" ""], xlabel = "\\omega", ylabel = "\\Delta p")
-end
-=#
 #---------------------------------------------------------------------------------------------------

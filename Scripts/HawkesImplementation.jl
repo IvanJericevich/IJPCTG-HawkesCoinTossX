@@ -18,7 +18,7 @@ HawkesImplementation:
     Main thing to check here is that our parameters result in a relatively balanced system where the number of events reducing the liquidity is roughly the same as the
     number of events increasing the liquidity i.e. ∑(3+4+5+6) ≈ ∑(1+2+7+8+9+10). The event counts of these should be roughly the same.
 =#
-using DataFrames, Dates#, CSV#, Optim
+using DataFrames, Dates#, Optim#, CSV
 clearconsole()
 include(pwd() * "/Scripts/Hawkes.jl")
 include(pwd() * "/Scripts/DataCleaning.jl")
@@ -45,9 +45,9 @@ InjectSimulation(arrivals, seed = 5)
 
 #----- Hawkes Recalibration -----#
 events = [(:WalkingMO, :Buy, true), (:WalkingMO, :Sell, true), (:LO, :Buy, true), (:LO, :Sell, true), (:LO, :Buy, false), (:LO, :Sell, false), (:OC, :Buy, true), (:OC, :Sell, true), (:OC, :Buy, false), (:OC, :Sell, false)]
-data = PrepareData("OrdersSubmitted_2", "Trades_2") |> x -> ClassifyHawkesEvents(x) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> Dates.value.(collect(z[event].Time)) ./ 1000, events)
+data = PrepareData("Model2/OrdersSubmitted_1", "Model2/Trades_1") |> x -> CleanData(x) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> Dates.value.(collect(z[event].DateTime)) ./ 1000, events)
 initialSolution = log.(vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1))))
-logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), data, 1000, 10), initialSolution, autodiff = :forward)
+logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), data, 28800, 10), initialSolution, autodiff = :forward)
 @time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true))
 #=
 open("Parameters.txt", "w") do file
@@ -64,25 +64,20 @@ function InjectSimulation(arrivals; seed = 1)
     StartJVM()
     client = Login(1, 1)
     try # This ensures that the client gets logged out whether an error occurs or not
-        #=
-        SubmitOrder(client, Order("1", "Buy", "Limit", round(Int, RPareto(20, 1)[1]), 45))
-        SubmitOrder(client, Order("2", "Buy", "Limit", round(Int, RPareto(20, 1)[1]), 45))
-        SubmitOrder(client, Order("3", "Buy", "Limit", round(Int, RPareto(20, 1)[1]), 44))
-        SubmitOrder(client, Order("4", "Sell", "Limit", round(Int, RPareto(20, 1)[1]), 50))
-        SubmitOrder(client, Order("5", "Sell", "Limit", round(Int, RPareto(20, 1)[1]), 50))
-        SubmitOrder(client, Order("6", "Sell", "Limit", round(Int, RPareto(20, 1)[1]), 51))
-        =#
-        SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", arrivals.Volume[1], 51))
+        SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", arrivals.Volume[1], 100))
         arrivals.arrivalTime = arrivals.DateTime .+ Time(now())
+        previousBestBid = previousBestAsk = 0
         Juno.progress() do id # Progress bar
             for i in 2:nrow(arrivals)
                 bestBid = ReceiveMarketData(client, :Bid, :Price); bestAsk = ReceiveMarketData(client, :Ask, :Price)
-                if bestBid == 0 && bestAsk == 0 # If both sides are empty quit simulation
-                    error("Both sides of the LOB have emptied")
-                end
                 if arrivals.Type[i] == :LO # Limit order
                     limitOrder = arrivals[i, :]
-                    price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
+                    if bestBid == 0 && bestAsk == 0 # If both sides are empty => implement fail safe
+                        println("Both sides of the LOB emptied")
+                        price = limitOrder.Side == "Buy" ? previousBestBid : previousBestAsk
+                    else
+                        price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
+                    end
                     limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
@@ -102,6 +97,12 @@ function InjectSimulation(arrivals; seed = 1)
                         cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
                         CancelOrder(client, orderId, cancelOrder.Side, price)
                     end
+                end
+                if bestBid != 0 # Update previous best bid only if it is non-empty
+                    previousBestBid = bestBid
+                end
+                if bestAsk != 0 # Update previous best ask only if it is non-empty
+                    previousBestAsk = bestAsk
                 end
                 seed += 1 # Change seed for next iteration
                 @info "Trading" progress=(arrivals.DateTime[i] / arrivals.DateTime[end]) _id=id # Update progress
