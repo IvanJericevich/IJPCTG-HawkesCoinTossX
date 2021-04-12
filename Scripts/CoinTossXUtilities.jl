@@ -23,8 +23,8 @@ import JavaCall: iterator
 
 #----- Build, deploy, start CoinTossX and initialise Java Virtual Machine with required byte code paths -----#
 function StartJVM()
-    JavaCall.addClassPath("/home/ivanjericevich/CoinTossX/ClientSimulator/build/classes/main")
-    JavaCall.addClassPath("/home/ivanjericevich/CoinTossX/ClientSimulator/build/install/ClientSimulator/lib/*.jar")
+    JavaCall.addClassPath("/Users/patrickchang1/CoinTossX/ClientSimulator/build/classes/main")
+    JavaCall.addClassPath("/Users/patrickchang1/CoinTossX/ClientSimulator/build/install/ClientSimulator/lib/*.jar")
     JavaCall.init()
     Juno.notification("JVM started"; kind = :Info, options = Dict(:dismissable => false))
 end
