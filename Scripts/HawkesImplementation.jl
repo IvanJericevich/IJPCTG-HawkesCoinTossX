@@ -34,7 +34,7 @@ end
 #----- Simulation -----#
 Random.seed!(5)
 arrivals = ThinningSimulation(λ₀, α, β, 28800; seed = 5) |> x -> DataFrame(DateTime = map(t -> Millisecond(round(Int, t * 1000)), reduce(vcat, x)),Type = reduce(vcat, fill.([:MO, :MO, :LO, :LO, :LO, :LO, :OC, :OC, :OC, :OC], length.(x))), Side = reduce(vcat, fill.(["Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell", "Buy", "Sell"], length.(x))),
-Volume = round.(Int, vcat(RPareto(20, 1.5, sum(length.(x[1:2]))), RPareto(20, 1, sum(length.(x[3:6]))), fill(0, sum(length.(x[7:10]))))), Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, false, true, true], length.(x))))
+Volume = round.(Int, vcat(RPareto(20, 1, sum(length.(x[1:2]))), RPareto(20, 1, sum(length.(x[3:6]))), fill(0, sum(length.(x[7:10]))))), Passive = reduce(vcat, fill.([false, false, false, false, true, true, false, false, true, true], length.(x))))
 sort!(arrivals, :DateTime)
 delete!(arrivals, 1)
 arrivals.OrderId = string.(collect(1:nrow(arrivals)))
@@ -42,7 +42,8 @@ arrivals.DateTime .-= arrivals.DateTime[1]
 # arrivals.DateTime .÷= 2
 InjectSimulation(arrivals, seed = 5)
 #---------------------------------------------------------------------------------------------------
-
+mo = sum(arrivals.Volume[findall(x -> x == :MO, arrivals.Type)])
+lo = sum(arrivals.Volume[findall(x -> x == :LO, arrivals.Type)])
 #----- Hawkes Recalibration -----#
 events = [(:WalkingMO, :Buy, true), (:WalkingMO, :Sell, true), (:LO, :Buy, true), (:LO, :Sell, true), (:LO, :Buy, false), (:LO, :Sell, false), (:OC, :Buy, true), (:OC, :Sell, true), (:OC, :Buy, false), (:OC, :Sell, false)]
 data = PrepareData("Model2/OrdersSubmitted_1", "Model2/Trades_1") |> x -> CleanData(x) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> Dates.value.(collect(z[event].DateTime)) ./ 1000, events)
@@ -167,12 +168,12 @@ function InjectSimulation(arrivals; seed = 1)
                 if arrivals.Type[i] == :LO # Limit order
                     limitOrder = arrivals[i, :]
                     price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
-                    limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
+                    #limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
                     marketOrder = arrivals[i, :]
                     if (marketOrder.Side == "Buy" && bestAsk != 0) || (marketOrder.Side == "Sell" && bestBid != 0) # Don't submit a trade if the contra side is empty
-                        marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
+                        #marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
                         SubmitOrder(client, Order(marketOrder.OrderId, marketOrder.Side, "Market", marketOrder.Volume))
                     end
                 else # Order cancel
@@ -183,7 +184,7 @@ function InjectSimulation(arrivals; seed = 1)
                         Random.seed!(seed)
                         orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
                         price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
-                        cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
+                        #cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
                         CancelOrder(client, orderId, arrivals.Side[i], price)
                     end
                 end
