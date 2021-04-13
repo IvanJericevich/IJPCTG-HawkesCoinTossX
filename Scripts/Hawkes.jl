@@ -138,43 +138,25 @@ function R(history::Vector{Vector{Float64}}, β::Array{Type, 2}, i::Int64, j::In
     tⁱ = vcat([0.0], history[i]); tʲ = history[j]
     N = length(tⁱ)
     Rⁱᴶ = zeros(Type, N)
+	ix = 1
     for n in 2:N
         if i == j
             Rⁱᴶ[n] = exp(- β[i, j] * (tⁱ[n] - tⁱ[n - 1])) * (1 + Rⁱᴶ[n - 1])
         else
-            k = findall(x -> tⁱ[n - 1] <= x < tⁱ[n], tʲ)
-            Rⁱᴶ[n] = exp(- β[i, j] * (tⁱ[n] - tⁱ[n - 1])) * Rⁱᴶ[n - 1] + sum(exp.(- β[i, j] .* (tⁱ[n] .- tʲ[k])))
-        end
-    end
-    return Rⁱᴶ[2:end]
-end
-
-function recursion(history, beta, m, n)
-    history_m = history[m]
-    history_m = append!([0.0], history_m)
-    N = length(history_m)
-    R = zeros(Real, N, 1)
-    history_n = history[n]
-    beta = beta[m,n]
-    ix = Int(1)
-    for i in 2:N
-        if n == m
-            R[i] = exp(-beta * (history_m[i] - history_m[i-1])) * (1 + R[i-1])
-        else
-            R[i] = exp(-beta * (history_m[i] - history_m[i-1])) * R[i-1]
-            for j in ix:length(history_n)
-                if history_n[j] >= history_m[i-1]
-                    if history_n[j] < history_m[i]
-                        R[i] += exp(-beta*(history_m[i] - history_n[j]))
+			Rⁱᴶ[n] = exp(- β[i, j] * (tⁱ[n] - tⁱ[n - 1])) * Rⁱᴶ[n - 1]
+            for m in ix:length(tʲ)
+                if tʲ[m] >= tⁱ[n - 1]
+                    if tʲ[m] < tⁱ[n]
+                        Rⁱᴶ[n] += exp(- β[i, j] * (tⁱ[n] - tʲ[m]))
                     else
-                        ix = j
+                        ix = m
                         break
                     end
                 end
             end
         end
     end
-    return R[2:end]
+    return Rⁱᴶ[2:end]
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -213,46 +195,6 @@ function LogLikelihood(history::Vector{Vector{Float64}}, λ₀::Vector{Type}, α
 end
 #---------------------------------------------------------------------------------------------------
 
-#----- Hawkes moments -----#
-# Functions for calculating the moments of a multivariate Hawkes process
-function JumpMean(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
-    return ((inv(β - α) * β) * λ₀) .* T
-end
-function JumpVariance(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64) where Type <: Real
-	stationaryRegimeExpectedIntensity = (inv(β - α) * β) * λ₀
-	lambdaInfinity = lyap(α - β, (α * Diagonal(stationaryRegimeExpectedIntensity)) * transpose(α))
-	inverseAlphaMinusBeta = inv(α - β)
-	term1 = exp(T .* (α - β))
-	term2 = (inverseAlphaMinusBeta * (-T)) + (inverseAlphaMinusBeta^2) * (term1 - I)
-	term3 = term2 * (lambdaInfinity + (α * Diagonal(stationaryRegimeExpectedIntensity)))
-	return term3 + transpose(term3) + (Diagonal(stationaryRegimeExpectedIntensity) .* T)
-end
-function JumpAutocorrelation(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64, lag::Int64) where Type <: Real
-	dimension = length(λ₀)
-	jumpVariance = JumpVariance(λ₀, α, β, T)
-	stationaryRegimeExpectedIntensity = (inv(β - α) * β) * λ₀
-	lambdaInfinity = lyap(α - β, (α * Diagonal(stationaryRegimeExpectedIntensity)) * transpose(α))
-	term1 = exp(T .* (α - β))
-	term2 = exp(lag .* (α - β))
-	term3 = inv(α - β) * (term1 - I)
-	result = (term3 * term2 * term3) * (lambdaInfinity + (α * Diagonal(stationaryRegimeExpectedIntensity)))
-	for i in 1:dimension
-		for j in 1:dimension
-			result[i, j] /= sqrt(jumpVariance[i, i] * jumpVariance[j, j])
-		end
-	end
-	return result
-end
-#---------------------------------------------------------------------------------------------------
-
-#----- Method of moments objective -----#
-# Function to calculate the sum-of-squares of deviations of theoretical moments from empirical moments
-function ΣSquaredMomentDeviations(λ₀::Vector{Type}, α::Array{Type, 2}, β::Array{Type, 2}, T::Int64, empiricalMoments::Vector{Float64}) where Type <: Real
-	theoreticalMoments = vcat(JumpMean(λ₀, α, β, T), reduce(vcat, JumpVariance(λ₀, α, β, T)), reduce(vcat, JumpAutocorrelation(λ₀, α, β, T, 1)))
-	return transpose(1 .- (theoreticalMoments ./ empiricalMoments)) * I * (1 .- (theoreticalMoments ./ empiricalMoments))
-end
-#---------------------------------------------------------------------------------------------------
-
 #----- Calibration -----#
 # Functions to be used in the optimization routine (the below objectives should be minimized)
 function Calibrate(θ::Vector{Type}, history::Vector{Vector{Float64}}, T::Int64, dimension::Int64) where Type <: Real # Maximum likelihood estimation
@@ -260,12 +202,6 @@ function Calibrate(θ::Vector{Type}, history::Vector{Vector{Float64}}, T::Int64,
     α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
     β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
     return -LogLikelihood(history, λ₀, α, β, T)
-end
-function Calibrate(θ::Vector{Type}, empiricalMoments::Vector{Float64}, T::Int64, dimension::Int64) where Type <: Real # Method of moments estimation
-    λ₀ = θ[1:dimension]
-    α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
-    β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
-    return ΣSquaredMomentDeviations(λ₀, α, β, T, empiricalMoments)
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -311,14 +247,18 @@ alpha = [0 0.023; 0.023 0]
 beta = [0 0.11; 0.11 0]
 
 T = 3600*18     # large enough to get good estimates, but not too long that it'll run for too long
-t = simulateHawkes(lambda0, alpha, beta, T)
-
-loglikeHawkes(t, lambda0, alpha, beta, T)
-
-res = optimize(calibrateHawkes, [0.01, 0.015, 0.15], NelderMead())
-par = Optim.minimizer(res)
+t = ThinningSimulation(lambda0, alpha, beta, T)
+LogLikelihood(t, lambda0, alpha, beta, T)
+init = log.(vec(vcat(lambda0, reshape(alpha, :, 1), reshape(beta, :, 1))))
+#res = optimize(θ -> Calibrate(exp.(θ), t, T, 2), init, NelderMead(), Optim.Options(show_trace = true, iterations = 5000))
+logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), t, T, 2), init, autodiff = :forward)
+@time calibratedParameters = optimize(logLikelihood, init, LBFGS(), Optim.Options(show_trace = true, iterations = 5000))
+par = exp.(Optim.minimizer(res))
 # par is very close to that used in simulation
 
+
+
+#=
 trueparam = [0.015; 0.023; 0.11]
 
 param = [0.01, 0.015, 0.15]
@@ -338,3 +278,4 @@ par = Optim.minimizer(opt)
 x = loglikeHawkes(t, lambda0, alpha, beta, T)
 
 y = loglikeHawkes(t, lambda0, alpha, beta, T)
+=#
