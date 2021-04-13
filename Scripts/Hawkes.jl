@@ -206,12 +206,49 @@ end
 #---------------------------------------------------------------------------------------------------
 
 #----- Generalised residuals -----#
-function GeneralisedResiduals(history::Vector{Vector{Type}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}) where Type <: Real
-    dimension = length(λ₀)
-    GE = [Vector{Float64}() for _ in 1:dimension]
-    for m in 1:dimension # Loop through each dimension
-		integratedIntensity = map(t -> Λ(history, t, λ₀, α, β, m), history[m]) # Loop through the observations in each process
-		GE[m] = diff(integratedIntensity) # Compute the error
+function Λ_m(history, T, lambda0, alpha, beta, m)
+    Λ = lambda0[m] * T
+    dimension = length(lambda0)
+
+    Γ = zeros(Real, dimension, dimension)
+    for i in 1:dimension
+        for j in 1:dimension
+            if beta[i,j] != 0
+                Γ[i,j] = Real(alpha[i,j] / beta[i,j])
+            end
+        end
+    end
+
+    for n in 1:dimension
+        for i in 1:length(history[n])
+            if history[n][i] <= T
+                Λ += Γ[m,n] * (1 - exp(-beta[m,n] * (T - history[n][i])))
+            end
+        end
+    end
+    return Λ
+end
+
+function GeneralisedResiduals(history, lambda0, alpha, beta)
+    # Initialize
+    dimension = length(lambda0)
+    GE = Vector{Vector{Float64}}()
+    for i in 1:dimension
+        GE = push!(GE, [])
+    end
+    # Loop through each dimension
+    for m in 1:dimension
+        # Initialise the integrated intensity
+        Λ = zeros(length(history[m]), 1)
+        # Loop through the observations in each process
+        for l in 1:length(history[m])
+            Λ[l] = Λ_m(history, history[m][l], lambda0, alpha, beta, m)
+        end
+        # Compute the error and push it into Generalised Errors
+        for l in 2:length(history[m])
+            # Append results
+            GE[m] = append!(GE[m], Λ[l] - Λ[l-1])
+        end
     end
     return GE
 end
