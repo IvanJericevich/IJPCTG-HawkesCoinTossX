@@ -159,15 +159,18 @@ function InjectSimulation(arrivals; seed = 1)
     try # This ensures that the client gets logged out whether an error occurs or not
         SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", arrivals.Volume[1], 51))
         arrivals.arrivalTime = arrivals.DateTime .+ Time(now())
+        previousBestBid = previousBestAsk = 0
         Juno.progress() do id # Progress bar
             for i in 2:nrow(arrivals)
                 bestBid = ReceiveMarketData(client, :Bid, :Price); bestAsk = ReceiveMarketData(client, :Ask, :Price)
-                if bestBid == 0 && bestAsk == 0 # If both sides are empty quit simulation
-                    error("Both sides of the LOB have emptied")
-                end
                 if arrivals.Type[i] == :LO # Limit order
                     limitOrder = arrivals[i, :]
-                    price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
+                    if bestBid == 0 && bestAsk == 0 # If both sides are empty => implement fail safe
+                        println("Both sides of the LOB emptied")
+                        price = limitOrder.Side == "Buy" ? SetLimitPrice(limitOrder, bestBid, previousBestAsk, seed) : SetLimitPrice(limitOrder, previousBestBid, bestAsk, seed)
+                    else
+                        price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
+                    end
                     #limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
@@ -187,6 +190,12 @@ function InjectSimulation(arrivals; seed = 1)
                         #cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
                         CancelOrder(client, orderId, arrivals.Side[i], price)
                     end
+                end
+                if bestBid != 0 # Update previous best bid only if it is non-empty
+                    previousBestBid = bestBid
+                end
+                if bestAsk != 0 # Update previous best ask only if it is non-empty
+                    previousBestAsk = bestAsk
                 end
                 seed += 1 # Change seed for next iteration
                 @info "Trading" progress=(arrivals.DateTime[i] / arrivals.DateTime[end]) _id=id # Update progress
