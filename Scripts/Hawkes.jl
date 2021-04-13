@@ -148,6 +148,34 @@ function R(history::Vector{Vector{Float64}}, β::Array{Type, 2}, i::Int64, j::In
     end
     return Rⁱᴶ[2:end]
 end
+
+function recursion(history, beta, m, n)
+    history_m = history[m]
+    history_m = append!([0.0], history_m)
+    N = length(history_m)
+    R = zeros(Real, N, 1)
+    history_n = history[n]
+    beta = beta[m,n]
+    ix = Int(1)
+    for i in 2:N
+        if n == m
+            R[i] = exp(-beta * (history_m[i] - history_m[i-1])) * (1 + R[i-1])
+        else
+            R[i] = exp(-beta * (history_m[i] - history_m[i-1])) * R[i-1]
+            for j in ix:length(history_n)
+                if history_n[j] >= history_m[i-1]
+                    if history_n[j] < history_m[i]
+                        R[i] += exp(-beta*(history_m[i] - history_n[j]))
+                    else
+                        ix = j
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return R[2:end]
+end
 #---------------------------------------------------------------------------------------------------
 
 #----- Integrated intensity -----#
@@ -277,3 +305,36 @@ function Validate(simulation::Vector{Vector{Type}}, λ₀::Vector{Float64}, α::
 end
 =#
 #---------------------------------------------------------------------------------------------------
+
+lambda0 = [0.015;0.015]
+alpha = [0 0.023; 0.023 0]
+beta = [0 0.11; 0.11 0]
+
+T = 3600*18     # large enough to get good estimates, but not too long that it'll run for too long
+t = simulateHawkes(lambda0, alpha, beta, T)
+
+loglikeHawkes(t, lambda0, alpha, beta, T)
+
+res = optimize(calibrateHawkes, [0.01, 0.015, 0.15], NelderMead())
+par = Optim.minimizer(res)
+# par is very close to that used in simulation
+
+trueparam = [0.015; 0.023; 0.11]
+
+param = [0.01, 0.015, 0.15]
+
+
+res = optimize(calibrateHawkes, [0.01, 0.015, 0.15], NelderMead())
+
+func = TwiceDifferentiable(param -> -loglikeHawkes(t, [param[1] param[1]], [0 param[2]; param[2] 0], [0 param[3]; param[3] 0], T), [0.01, 0.015, 0.15]; autodiff=:forward);
+
+opt = optimize(func, [0.01, 0.015, 0.15])
+par = Optim.minimizer(opt)
+
+@time optimize(calibrateHawkes, [0.01, 0.015, 0.15], NelderMead())
+@time optimize(func, [0.01, 0.015, 0.15], show_trace = true)
+
+
+x = loglikeHawkes(t, lambda0, alpha, beta, T)
+
+y = loglikeHawkes(t, lambda0, alpha, beta, T)
