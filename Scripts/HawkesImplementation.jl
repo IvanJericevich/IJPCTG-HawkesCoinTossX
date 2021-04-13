@@ -75,7 +75,7 @@ function InjectSimulation(arrivals; seed = 1)
                     limitOrder = arrivals[i, :]
                     if bestBid == 0 && bestAsk == 0 # If both sides are empty => implement fail safe
                         println("Both sides of the LOB emptied")
-                        price = limitOrder.Side == "Buy" ? previousBestBid : previousBestAsk
+                        price = limitOrder.Side == "Buy" ? SetLimitPrice(limitOrder, bestBid, previousBestAsk, seed) : SetLimitPrice(limitOrder, previousBestBid, bestAsk, seed)
                     else
                         price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
                     end
