@@ -89,14 +89,16 @@ function InjectSimulation(arrivals; seed = 1)
                     end
                 elseif arrivals.Type[i] == :OC # Order cancel
                     cancelOrder = arrivals[i, :]
-                    (LOBSnapshot, best) = cancelOrder.Side == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid, :Price)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask, :Price))
-                    OrderIds = cancelOrder.Passive ? [k for (k,v) in LOBSnapshot if v.Price != best] : [k for (k,v) in LOBSnapshot if v.Price == best]
-                    if !isempty(OrderIds)
-                        Random.seed!(seed)
-                        orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
-                        price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
-                        cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
-                        CancelOrder(client, orderId, cancelOrder.Side, price)
+                    if (cancelOrder.Side == "Buy" && bestBid != 0) || (cancelOrder.Side == "Sell" && bestAsk != 0) # Only send a cancel order through if the LOB is non-empty
+                        (LOBSnapshot, best) = cancelOrder.Side == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid, :Price)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask, :Price))
+                        OrderIds = cancelOrder.Passive ? [k for (k,v) in LOBSnapshot if v.Price != best] : [k for (k,v) in LOBSnapshot if v.Price == best]
+                        if !isempty(OrderIds)
+                            Random.seed!(seed)
+                            orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
+                            price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
+                            cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
+                            CancelOrder(client, orderId, cancelOrder.Side, price)
+                        end
                     end
                 end
                 if bestBid != 0 # Update previous best bid only if it is non-empty
@@ -171,24 +173,26 @@ function InjectSimulation(arrivals; seed = 1)
                     else
                         price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
                     end
-                    #limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
+                    limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
                     marketOrder = arrivals[i, :]
                     if (marketOrder.Side == "Buy" && bestAsk != 0) || (marketOrder.Side == "Sell" && bestBid != 0) # Don't submit a trade if the contra side is empty
-                        #marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
+                        marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
                         SubmitOrder(client, Order(marketOrder.OrderId, marketOrder.Side, "Market", marketOrder.Volume))
                     end
                 else # Order cancel
                     cancelOrder = arrivals[i, :]
-                    (LOBSnapshot, best) = arrivals.Side[i] == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid, :Price)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask, :Price))
-                    OrderIds = cancelOrder.Passive ? [k for (k,v) in LOBSnapshot if v.Price != best] : [k for (k,v) in LOBSnapshot if v.Price == best]
-                    if !isempty(OrderIds)
-                        Random.seed!(seed)
-                        orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
-                        price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
-                        #cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
-                        CancelOrder(client, orderId, arrivals.Side[i], price)
+                    if (cancelOrder.Side == "Buy" && bestBid != 0) || (cancelOrder.Side == "Sell" && bestAsk != 0) # Only send a cancel order through if the LOB is non-empty
+                        (LOBSnapshot, best) = arrivals.Side[i] == "Buy" ? (ReceiveLOBSnapshot(client, "Buy"), ReceiveMarketData(client, :Bid, :Price)) : (ReceiveLOBSnapshot(client, "Sell"), ReceiveMarketData(client, :Ask, :Price))
+                        OrderIds = cancelOrder.Passive ? [k for (k,v) in LOBSnapshot if v.Price != best] : [k for (k,v) in LOBSnapshot if v.Price == best]
+                        if !isempty(OrderIds)
+                            Random.seed!(seed)
+                            orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
+                            price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
+                            cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
+                            CancelOrder(client, orderId, arrivals.Side[i], price)
+                        end
                     end
                 end
                 if bestBid != 0 # Update previous best bid only if it is non-empty
