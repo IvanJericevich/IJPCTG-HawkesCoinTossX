@@ -15,19 +15,20 @@ beta = [0 0.11; 0.11 0]
 T = 3600*30     # large enough to get good estimates, but not too long that it'll run for too long
 t = ThinningSimulation(lambda0, alpha, beta, T)
 
-LogLikelihood(t, lambda0, alpha, beta, T)
+loglikeHawkes(t, lambda0, alpha, beta, T)
 
-
-function Calibrate2(θ::Vector{Type}, history::Vector{Vector{Float64}}, T::Int64, dimension::Int64) where Type <: Real # Maximum likelihood estimation
-    λ₀ = [θ[1]; θ[2]]
-    α  = [0 θ[2]; θ[2] 0]
-    β  = [0 θ[3]; θ[3] 0]
-    return -LogLikelihood(history, λ₀, α, β, T)
-    # return -loglikeHawkes(history, λ₀, α, β, T)
+function Calibrate(param)
+    lambda0 = [param[1] param[1]]
+    alpha = [0 param[2]; param[2] 0]
+    beta = [0 param[3]; param[3] 0]
+    return -loglikeHawkes(t, lambda0, alpha, beta, T)
 end
 
+res = optimize(Calibrate, [0.015; 0.023; 0.11])
+par = Optim.minimizer(res)
+
 init = log.([0.015; 0.023; 0.11])
-logLikelihood = TwiceDifferentiable(θ -> Calibrate2(exp.(θ), t, T, 2), init, autodiff = :forward)
+logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ)), init, autodiff = :forward)
 calibratedParameters = optimize(logLikelihood, init, LBFGS(), Optim.Options(show_trace = true, iterations = 5000))
 par = exp.(Optim.minimizer(calibratedParameters))
 
