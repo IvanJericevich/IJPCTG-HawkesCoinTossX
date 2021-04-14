@@ -67,7 +67,7 @@ function InjectSimulation(arrivals; seed = 1)
     try # This ensures that the client gets logged out whether an error occurs or not
         SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", arrivals.Volume[1], 1000))
         arrivals.arrivalTime = arrivals.DateTime .+ Time(now())
-        previousBestBid = previousBestAsk = 0
+        previousBestBid = previousBestAsk = 1000
         Juno.progress() do id # Progress bar
             for i in 2:nrow(arrivals)
                 bestBid = ReceiveMarketData(client, :Bid, :Price); bestAsk = ReceiveMarketData(client, :Ask, :Price)
@@ -161,7 +161,7 @@ function InjectSimulation(arrivals; seed = 1)
     try # This ensures that the client gets logged out whether an error occurs or not
         SubmitOrder(client, Order(arrivals.OrderId[1], arrivals.Side[1], "Limit", arrivals.Volume[1], 1000))
         arrivals.arrivalTime = arrivals.DateTime .+ Time(now())
-        previousBestBid = previousBestAsk = 0
+        previousBestBid = previousBestAsk = 1000
         Juno.progress() do id # Progress bar
             for i in 2:nrow(arrivals)
                 bestBid = ReceiveMarketData(client, :Bid, :Price); bestAsk = ReceiveMarketData(client, :Ask, :Price)
