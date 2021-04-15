@@ -274,14 +274,12 @@ end
 
 #----- Calibration -----#
 # Functions to be used in the optimization routine (the below objectives should be minimized)
-#=
 function Calibrate(θ::Vector{Type}, history::Vector{Vector{Float64}}, T::Int64, dimension::Int64) where Type <: Real # Maximum likelihood estimation
     λ₀ = θ[1:dimension]
     α = reshape(θ[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
     β = reshape(θ[(end - dimension * dimension + 1):end], dimension, dimension)
-    return -LogLikelihood(history, λ₀, α, β, T)
+    return -loglikeHawkes(history, λ₀, α, β, T)
 end
-=#
 #---------------------------------------------------------------------------------------------------
 
 #----- Generalised residuals -----#

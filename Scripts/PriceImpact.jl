@@ -36,20 +36,24 @@ function PriceImpact(files::Vector{String}) # REVIEW: We are only doing one day 
     for (k, v) in data
         tradeIndeces[k] = findall(x -> x == :MO, v.Type)
         totalTradeCount += length(tradeIndeces[k])
-        dailyValue[k] = sum(v.Price[tradeIndeces[k]] * v.Volume[tradeIndeces[k]])
+        #dailyValue[k] = sum(v.Price[tradeIndeces[k]] * v.Volume[tradeIndeces[k]])
     end
     averageDailyValue = mean(dailyValue)
     buyerInitiated = DataFrame(Impact = Vector{Float64}(), NormalizedVolume = Vector{Float64}()); sellerInitiated = DataFrame(Impact = Vector{Float64}(), NormalizedVolume = Vector{Float64}())
     for (k, v) in data
         dayVolume = sum(v.Volume[tradeIndeces[k]])
         for index in tradeIndeces[k]
-            midPriceBeforeTrade = data.MidPrice[index - 1]; midPriceAfterTrade = data.MidPrice[index + 1]
+            midPriceBeforeTrade = v.MidPrice[index - 1]; midPriceAfterTrade = v.MidPrice[index + 1]
             Δp = log(midPriceAfterTrade) - log(midPriceBeforeTrade)
-            ω = (data.Volume[index] / dayVolume) * (totalTradeCount / length(files))
-            v.Side[index] == -1 ? push!(buyerInitiated, (Δp, ω)) : push!(sellerInitiated, (-Δp, ω))
+            ω = (v.Volume[index] / dayVolume) * (totalTradeCount / length(files))
+            if !ismissing(Δp) && !ismissing(ω)
+                v.Side[index] == -1 ? push!(buyerInitiated, (Δp, ω)) : push!(sellerInitiated, (-Δp, ω))
+            end
         end
-    return buyerInitiated, sellerInitiated, averageDailyValue
+    end
+    return buyerInitiated, sellerInitiated#, averageDailyValue
 end
+b, s = PriceImpact(["Model1/L1LOB"])
 #=
 function PlotPriceImpact(data::DataFrame)
     ω = zeros(Float64, 21); Δp = zeros(Float64, 21)

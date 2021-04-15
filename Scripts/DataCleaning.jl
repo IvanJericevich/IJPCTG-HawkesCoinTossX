@@ -10,9 +10,8 @@ DataCleaning:
     4. Plot simulation results
     5. Extract OHLCV data
 - Examples:
-    hawkesData = PrepareData("OrdersSubmitted_1", "Trades_1") |> taq -> CleanData(taq; allowCrossing = true)
-    VisualiseSimulation(hawkesData, "Model1L1LOB"; format = "png")
-- TODO: Check that crossed orders are handled right
+    hawkesData = PrepareData("Model2/OrdersSubmitted_1", "Model2/Trades_1") |> taq -> CleanData(taq; allowCrossing = false)
+    VisualiseSimulation(hawkesData, "Model2/L1LOB"; format = "png")
 =#
 using CSV, DataFrames, Dates, Plots, Statistics
 clearconsole()
@@ -58,6 +57,19 @@ function MicroPrice(best::NamedTuple, contraBest::NamedTuple)::Union{Missing, Fl
 end
 function Spread(best::NamedTuple, contraBest::NamedTuple)::Union{Missing, Float64}
     return (isempty(best) || isempty(contraBest)) ? missing : abs(best.Price - contraBest.Price)
+end
+function OrderImbalance(bids::Dict{Int64, Tuple{Int64, Int64}}, asks::Dict{Int64, Tuple{Int64, Int64}})::Union{Missing, Float64}
+    if isempty(bids) && isempty(asks)
+        return missing
+    elseif isempty(bids)
+        return - sum(last.(collect(values(asks))))
+    elseif isempty(asks)
+        return sum(last.(collect(values(bids))))
+    else
+        totalBuyVolume = sum(last.(collect(values(bids))))
+        totalSellVolume = sum(last.(collect(values(asks))))
+        return totalBuyVolume - totalSellVolume
+    end
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -241,8 +253,9 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
     bestBid = NamedTuple(); bestAsk = NamedTuple() # Current best bid/ask is stored in a tuple (Price, vector of Volumes, vector of OrderIds) and tracked
     crossedOrderId = nothing # Stores the order that crossed if it hasn't been fully handled yet. If it has been processed then contains nothing
     isAggressive = Vector{Bool}() # Classifies all events as either aggressive or passive
+    imbalance = Vector{Union{Missing, Float64}}() # Calculate the order imbalance in the LOB
     animation = visualise ? Animation() : nothing
-    open("Data/L1LOB.csv", "w") do file
+    open("Data/Model2/L1LOB.csv", "w") do file
         println(file, "DateTime,Price,Volume,Type,Side,MidPrice,MicroPrice,Spread") # Header
         Juno.progress() do id # Progress bar
             for i in 1:nrow(orders) # Iterate through all orders
@@ -284,6 +297,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                     push!(isAggressive, true) # Walking MO is always aggressive. Ignore these in cleaning since it is handled by split MOs
                     crossedOrderId = nothing # Reset since effective market orders have been handled
                 end
+                push!(imbalance, OrderImbalance(bids, asks))
                 if visualise # Visualisation
                     PlotLOBSnapshot(bids, asks)
                     frame(animation)
@@ -295,7 +309,8 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
     end
     Juno.notification("Data cleaning complete"; kind = :Info, options = Dict(:dismissable => false))
     orders.IsAggressive = isAggressive # Append classification to data
-    orders.DateTime = orders.DateTime .- orders.DateTime[1]
+    orders.DateTime = Dates.value.(orders.DateTime .- orders.DateTime[1]) # Reformat times into relative times
+    orders.Imbalance = imbalance # Append order imbalance to data
     return orders
 end
 function PlotLOBSnapshot(bids::Dict{Int64, Tuple{Int64, Int64}}, asks::Dict{Int64, Tuple{Int64, Int64}})
@@ -316,21 +331,29 @@ end
 #---------------------------------------------------------------------------------------------------
 
 #----- Plot simulation results -----#
-function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf")
+function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf", duration = missing)
     filter!(x -> x.Type != :WalkingMO, orders)
-    l1lob = CSV.File(string("Data/", l1lob, ".csv"), types = Dict(:Type => Symbol), missingstring = "missing") |> DataFrame |> x -> filter(y -> x.Type != :MO && x.Type != :EMO, x) # Filter out trades from L1LOB since their mid-prices are missing
+    l1lob = CSV.File(string("Data/", l1lob, ".csv"), types = Dict(:Type => Symbol, :Spread => Float64), missingstring = "missing") |> DataFrame |> x -> filter(y -> x.Type != :MO && x.Type != :EMO, x) # Filter out trades from L1LOB since their mid-prices are missing
+    l1lob.DateTime = Dates.value.(l1lob.DateTime .- l1lob.DateTime[1])
+    if !ismissing(duration)
+        filter!(x -> x.DateTime <= duration, l1lob); filter!(x -> x.DateTime <= duration, orders)
+    end
     asks = filter(x -> x.Type == :LO && x.Side == :Sell, orders); bids = filter(x -> x.Type == :LO && x.Side == :Buy, orders)
     sells = filter(x -> x.Type == :MO && x.Side == :Buy, orders); buys = filter(x -> x.Type == :MO && x.Side == :Sell, orders) # scale * (asks.Volume / mean(asks.Volume))
     cancelAsks = filter(x -> x.Type == :OC && x.Side == :Sell, orders); cancelBids = filter(x -> x.Type == :OC && x.Side == :Buy, orders)
-    bubblePlot = plot(Time.(asks.DateTime), asks.Price, seriestype = :scatter, marker = (:red, stroke(:red), 0.7), label = "Ask (LO)", xlabel = "Time", ylabel = "Price (ticks)", legend = :topleft, legendfontsize = 5, xrotation = 30)
-    plot!(bubblePlot, Time.(bids.DateTime), bids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), 0.7), label = "Bid (LO)")
-    plot!(bubblePlot, Time.(sells.DateTime), sells.Price, seriestype = :scatter, marker = (:red, stroke(:red), :utriangle, 0.7), label = "Sell (MO)")
-    plot!(bubblePlot, Time.(buys.DateTime), buys.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :utriangle, 0.7), label = "Buy (MO)")
-    plot!(bubblePlot, Time.(cancelAsks.DateTime), cancelAsks.Price, seriestype = :scatter, marker = (:red, stroke(:red), :xcross, 0.7), label = "Cancel Ask (LO)")
-    plot!(bubblePlot, Time.(cancelBids.DateTime), cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
-    plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MidPrice, seriestype = :steppre, linecolor = :black, label = "Mid-price")
-    plot!(bubblePlot, Time.(l1lob.DateTime), l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
-    savefig(bubblePlot, "Figures/BubblePlot." * format)
+    bubblePlot = plot(asks.DateTime, asks.Price, seriestype = :scatter, marker = (:red, stroke(:red), 0.7), label = "Ask (LO)", ylabel = "Price (ticks)", legend = :topleft, legendfontsize = 5, xrotation = 30)
+    plot!(bubblePlot, bids.DateTime, bids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), 0.7), label = "Bid (LO)")
+    plot!(bubblePlot, sells.DateTime, sells.Price, seriestype = :scatter, marker = (:red, stroke(:red), :utriangle, 0.7), label = "Sell (MO)")
+    plot!(bubblePlot, buys.DateTime, buys.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :utriangle, 0.7), label = "Buy (MO)")
+    plot!(bubblePlot, cancelAsks.DateTime, cancelAsks.Price, seriestype = :scatter, marker = (:red, stroke(:red), :xcross, 0.7), label = "Cancel Ask (LO)")
+    plot!(bubblePlot, cancelBids.DateTime, cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
+    plot!(bubblePlot, l1lob.DateTime, l1lob.MidPrice, seriestype = :steppost, linecolor = :black, label = "Mid-price")
+    plot!(bubblePlot, l1lob.DateTime, l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
+    volumeImbalance = plot(orders.DateTime, orders.Imbalance, seriestype = :line, linecolor = :purple, xlabel = "Time (s)", ylabel = "Order Imbalance (%)", label = "OrderImbalance", legend = :topleft)
+    plot!(twinx(), l1lob.DateTime, l1lob.Spread, seriestype = :steppost, linecolor = :orange, xlabel = "Time (s)", ylabel = "Spread", label = "Spread", legend = :topright)
+    l = @layout([a; b{0.3h}])
+    simulation = plot(bubblePlot, volumeImbalance, layout = l, link = :x)
+    savefig(simulation, "Figures/Simulation." * format)
 end
 #---------------------------------------------------------------------------------------------------
 

@@ -39,17 +39,15 @@ sort!(arrivals, :DateTime)
 delete!(arrivals, 1)
 arrivals.OrderId = string.(collect(1:nrow(arrivals)))
 arrivals.DateTime .-= arrivals.DateTime[1]
-# arrivals.DateTime .÷= 2
 InjectSimulation(arrivals, seed = 5)
 #---------------------------------------------------------------------------------------------------
-mo = sum(arrivals.Volume[findall(x -> x == :MO, arrivals.Type)])
-lo = sum(arrivals.Volume[findall(x -> x == :LO, arrivals.Type)])
+
 #----- Hawkes Recalibration -----#
 events = [(:WalkingMO, :Buy, true), (:WalkingMO, :Sell, true), (:LO, :Buy, true), (:LO, :Sell, true), (:LO, :Buy, false), (:LO, :Sell, false), (:OC, :Buy, true), (:OC, :Sell, true), (:OC, :Buy, false), (:OC, :Sell, false)]
-data = PrepareData("Model2/OrdersSubmitted_1", "Model2/Trades_1") |> x -> CleanData(x) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> Dates.value.(collect(z[event].DateTime)) ./ 1000, events)
+data = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> x -> CleanData(x; allowCrossing = true) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> collect(z[event].DateTime) ./ 1000, events)
 initialSolution = log.(vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1))))
 logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), data, 28800, 10), initialSolution, autodiff = :forward)
-@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true))
+@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true, iterations = 10000))
 #=
 open("Parameters.txt", "w") do file
     for p in exp.(Optim.minimizer(calibratedParameters))
