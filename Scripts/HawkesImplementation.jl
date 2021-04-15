@@ -171,12 +171,12 @@ function InjectSimulation(arrivals; seed = 1)
                     else
                         price = SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
                     end
-                    # limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
+                    limitOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - limitOrder.arrivalTime)) : sleep(limitOrder.arrivalTime - Time(now()))
                     SubmitOrder(client, Order(limitOrder.OrderId, limitOrder.Side, "Limit", limitOrder.Volume, price))
                 elseif arrivals.Type[i] == :MO # Market order
                     marketOrder = arrivals[i, :]
                     if (marketOrder.Side == "Buy" && bestAsk != 0) || (marketOrder.Side == "Sell" && bestBid != 0) # Don't submit a trade if the contra side is empty
-                        # marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
+                        marketOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - marketOrder.arrivalTime)) : sleep(marketOrder.arrivalTime - Time(now()))
                         SubmitOrder(client, Order(marketOrder.OrderId, marketOrder.Side, "Market", marketOrder.Volume))
                     end
                 else # Order cancel
@@ -188,7 +188,7 @@ function InjectSimulation(arrivals; seed = 1)
                             Random.seed!(seed)
                             orderId = rand(OrderIds) # Passive => sample from orders not in L1; aggressive => sample from orders in L1
                             price = LOBSnapshot[orderId].Price # Get the price of the corresponding orderId
-                            # cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
+                            cancelOrder.arrivalTime <= Time(now()) ? println(string("Timeout: ", Time(now()) - cancelOrder.arrivalTime)) : sleep(cancelOrder.arrivalTime - Time(now()))
                             CancelOrder(client, orderId, arrivals.Side[i], price)
                         end
                     end
