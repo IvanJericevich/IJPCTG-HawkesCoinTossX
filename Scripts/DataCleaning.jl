@@ -10,8 +10,9 @@ DataCleaning:
     4. Plot simulation results
     5. Extract OHLCV data
 - Examples:
-    hawkesData = PrepareData("Model2/OrdersSubmitted_1", "Model2/Trades_1") |> taq -> CleanData(taq; allowCrossing = false)
-    VisualiseSimulation(hawkesData, "Model2/L1LOB"; format = "png")
+    taqData = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> taq -> CleanData(taq; allowCrossing = true)
+    hawkesData = PrepareHawkesData(taqData)
+    VisualiseSimulation(taqData, "Model1/L1LOB"; format = "png")
 =#
 using CSV, DataFrames, Dates, Plots, Statistics
 clearconsole()
@@ -45,6 +46,36 @@ function PrepareData(ordersSubmitted::String, trades::String)
     rename!(orders, :ClientOrderId => :OrderId)
     sort!(orders, :DateTime)
     return orders
+end
+function PrepareHawkesData(orders::DataFrame)
+    previousTime = Millisecond(2)
+    data = DataFrame(DateTime = Vector{Float64}(), Type = Vector{Symbol}(), Side = Vector{Symbol}(), IsAggressive = Vector{Bool}())
+    for i in 1:nrow(orders)
+        order = orders[i, :]
+        if order.Type == :CLO # Crossing limit order => record the EMO first
+            aggregateVolume = 0
+            count = 1
+            while orders.Type[i + count] == :EMO
+                aggregateVolume += orders.Volume[i + count]
+                count += 1
+            end
+            side = order.Side == :Buy ? :Sell : :Buy # MO side is opposite to contra side
+            time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
+            push!(data, (Dates.value(time) / 1000, :WalkingMO, side, true)) # Push the aggregated EMO
+            if aggregateVolume != order.Volume
+                time += Millisecond(1)
+                push!(data, (Dates.value(time) / 1000, :LO, order.Side, true)) # Push the crossed LO with DateTime modified by 1 millisecond
+            end
+            previousTime = time
+        elseif order.Type != :EMO && order.Type != :MO # Disregard split MOs and EMOs since they are aggregated in the above case
+            time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
+            push!(data, (Dates.value(time) / 1000, order.Type, order.Side, order.IsAggressive))
+            previousTime = time
+        end
+    end
+    events = [(:WalkingMO, :Buy, true), (:WalkingMO, :Sell, true), (:LO, :Buy, true), (:LO, :Sell, true), (:LO, :Buy, false), (:LO, :Sell, false), (:OC, :Buy, true), (:OC, :Sell, true), (:OC, :Buy, false), (:OC, :Sell, false)]
+    hawkesData = groupby(data, [:Type, :Side, :IsAggressive]) |> x -> map(event -> collect(x[event].DateTime), events)
+    return hawkesData
 end
 #---------------------------------------------------------------------------------------------------
 
@@ -106,6 +137,7 @@ function ProcessLimitOrder!(file::IOStream, order::DataFrameRow, best::NamedTupl
                 if allowCrossing # Either disallow crossing or treat crossed order as effective market order at the next iteration
                     println(string("Order ", order.OrderId, " crossed the spread"))
                     crossedOrderId = order.OrderId # Update the L1LOB with the crossed order. The trades occuring hereafter will be deducted from this as well as from the best on the contra side
+                    order.Type = :CLO
                 else
                     error("Negative spread at order " * string(order.OrderId))
                 end
@@ -232,6 +264,7 @@ function ProcessEffectiveMarketOrder!(file::IOStream, order::DataFrameRow, best:
         lob[crossedOrderId] = (lob[crossedOrderId][1], lob[crossedOrderId][2] - order.Volume)
         best = (Price = best.Price, Volume = best.Volume - order.Volume, OrderId = best.OrderId)
     end
+    order.Type = :EMO
     midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
     println(file, string(order.DateTime, ",", order.Price, ",", order.Volume, ",EMO,", side, ",", midPrice, ",", microPrice, ",", spread))
     return best, crossedOrderId # Return the id of the crossed order if it was partially filled
@@ -255,7 +288,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
     isAggressive = Vector{Bool}() # Classifies all events as either aggressive or passive
     imbalance = Vector{Union{Missing, Float64}}() # Calculate the order imbalance in the LOB
     animation = visualise ? Animation() : nothing
-    open("Data/Model2/L1LOB.csv", "w") do file
+    open("Data/Model1/L1LOB.csv", "w") do file
         println(file, "DateTime,Price,Volume,Type,Side,MidPrice,MicroPrice,Spread") # Header
         Juno.progress() do id # Progress bar
             for i in 1:nrow(orders) # Iterate through all orders
@@ -309,7 +342,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
     end
     Juno.notification("Data cleaning complete"; kind = :Info, options = Dict(:dismissable => false))
     orders.IsAggressive = isAggressive # Append classification to data
-    orders.DateTime = Dates.value.(orders.DateTime .- orders.DateTime[1]) # Reformat times into relative times
+    orders.DateTime = orders.DateTime .- orders.DateTime[1] # Reformat times into relative times (milliseconds)
     orders.Imbalance = imbalance # Append order imbalance to data
     return orders
 end
@@ -333,8 +366,9 @@ end
 #----- Plot simulation results -----#
 function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf", duration = missing)
     filter!(x -> x.Type != :WalkingMO, orders)
+    orders.DateTime = Dates.value.(orders.DateTime) ./ 1000
     l1lob = CSV.File(string("Data/", l1lob, ".csv"), types = Dict(:Type => Symbol, :Spread => Float64), missingstring = "missing") |> DataFrame |> x -> filter(y -> x.Type != :MO && x.Type != :EMO, x) # Filter out trades from L1LOB since their mid-prices are missing
-    l1lob.DateTime = Dates.value.(l1lob.DateTime .- l1lob.DateTime[1])
+    l1lob.DateTime = Dates.value.(l1lob.DateTime .- l1lob.DateTime[1]) ./ 1000
     if !ismissing(duration)
         filter!(x -> x.DateTime <= duration, l1lob); filter!(x -> x.DateTime <= duration, orders)
     end
@@ -349,8 +383,8 @@ function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf", d
     plot!(bubblePlot, cancelBids.DateTime, cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
     plot!(bubblePlot, l1lob.DateTime, l1lob.MidPrice, seriestype = :steppost, linecolor = :black, label = "Mid-price")
     plot!(bubblePlot, l1lob.DateTime, l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
-    volumeImbalance = plot(orders.DateTime, orders.Imbalance, seriestype = :line, linecolor = :purple, xlabel = "Time (s)", ylabel = "Order Imbalance (%)", label = "OrderImbalance", legend = :topleft)
-    plot!(twinx(), l1lob.DateTime, l1lob.Spread, seriestype = :steppost, linecolor = :orange, xlabel = "Time (s)", ylabel = "Spread", label = "Spread", legend = :topright)
+    volumeImbalance = plot(orders.DateTime, orders.Imbalance, seriestype = :line, linecolor = :purple, xlabel = "Time (s)", ylabel = "Order Imbalance (%)", label = "OrderImbalance", legend = :topleft, legendfontsize = 5)
+    plot!(twinx(), l1lob.DateTime, l1lob.Spread, seriestype = :steppost, linecolor = :orange, xlabel = "Time (s)", ylabel = "Spread", label = "Spread", legend = :topright, legendfontsize = 5)
     l = @layout([a; b{0.3h}])
     simulation = plot(bubblePlot, volumeImbalance, layout = l, link = :x)
     savefig(simulation, "Figures/Simulation." * format)

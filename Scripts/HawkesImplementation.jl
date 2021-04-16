@@ -44,7 +44,7 @@ InjectSimulation(arrivals, seed = 5)
 
 #----- Hawkes Recalibration -----#
 events = [(:WalkingMO, :Buy, true), (:WalkingMO, :Sell, true), (:LO, :Buy, true), (:LO, :Sell, true), (:LO, :Buy, false), (:LO, :Sell, false), (:OC, :Buy, true), (:OC, :Sell, true), (:OC, :Buy, false), (:OC, :Sell, false)]
-data = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> x -> CleanData(x; allowCrossing = true) |> y -> groupby(y, [:Type, :Side, :IsAggressive]) |> z -> map(event -> collect(z[event].DateTime) ./ 1000, events)
+data = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> x -> CleanData(x; allowCrossing = true) |> y -> PrepareHawkesData(y)
 initialSolution = log.(vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1))))
 logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), data, 28800, 10), initialSolution, autodiff = :forward)
 @time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true, iterations = 10000))
