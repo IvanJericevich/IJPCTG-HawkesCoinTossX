@@ -18,7 +18,7 @@ HawkesImplementation:
     Main thing to check here is that our parameters result in a relatively balanced system where the number of events reducing the liquidity is roughly the same as the
     number of events increasing the liquidity i.e. ∑(3+4+5+6) ≈ ∑(1+2+7+8+9+10). The event counts of these should be roughly the same.
 =#
-using DataFrames, Dates#, Optim#, CSV
+using DataFrames, Dates, ForwardDiff#, Optim#, CSV
 clearconsole()
 include(pwd() * "/Scripts/Hawkes.jl")
 include(pwd() * "/Scripts/DataCleaning.jl")
@@ -56,6 +56,9 @@ open("Parameters.txt", "w") do file
 end
 MAE = mean(abs.(exp.(Optim.minimizer(calibratedParameters)) - initialSolution))
 =#
+temp = θ -> -Calibrate(exp.(θ), data, 28800, 10)
+test = ForwardDiff.hessian(temp, Optim.minimizer(calibratedParameters))
+inv(-test)
 #---------------------------------------------------------------------------------------------------
 
 #----- Model 1 -----#
