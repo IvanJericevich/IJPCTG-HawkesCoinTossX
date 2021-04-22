@@ -8,7 +8,7 @@ HawkesCalibration:
     2. Raw Hawkes calibration
     3. Hypothesis tests and confidence intervals
 =#
-using DataFrames, Dates, Optim, CSV, ForwardDiff
+using DataFrames, Dates, Optim, CSV, ForwardDiff, Distributions
 clearconsole()
 include(pwd() * "/Scripts/Hawkes.jl")
 include(pwd() * "/Scripts/DataCleaning.jl")
@@ -60,6 +60,9 @@ end
 #----- Hypothesis tests and confidence intervals -----#
 # Fits the score and Fisher info with model data using original params to see if the true params still work.
 θ₀ = vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1)))
+θ0 = CSV.File("Data/Parameters.txt", header = false) |> Tables.matrix |> vec
+
+# Score test
 
 Model1data = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> x -> CleanData(x, allowCrossing = true) |> y -> PrepareHawkesData(y)
 Model1Score = ForwardDiff.gradient(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₀)
@@ -75,16 +78,16 @@ RawScore = ForwardDiff.gradient(θ -> -Calibrate(θ, t, 28800, 10), θ₀)
 RawFisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, t, 28800, 10), θ₀)
 RawScoreTest = RawScore' * inv(RawFisher) * RawScore
 
-H = ForwardDiff.hessian(θ -> -Calibrate(exp.(θ), data, 28800, 10), Optim.minimizer(calibratedParameters))
-𝓘 = inv(-H)
-lam = θ₀[1:dimension]
-a = reshape(θ₀[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
-b = reshape(θ₀[(end - dimension * dimension + 1):end], dimension, dimension)
+# H = ForwardDiff.hessian(θ -> -Calibrate(exp.(θ), data, 28800, 10), Optim.minimizer(calibratedParameters))
+# 𝓘 = inv(-H)
 
-Calibrate(θ₀, Model1data, 28800, 10) / Calibrate(θ₁, Model1data, 28800, 10)
-Calibrate(θ₀, Model2data, 28800, 10) / Calibrate(θ₂, Model2data, 28800, 10)
+# Likelihood ratio test
 
--2*log(Calibrate(θ₀, Model1data, 28800, 10) / Calibrate(θ₁, Model1data, 28800, 10))
--2*log(Calibrate(θ₀, Model2data, 28800, 10) / Calibrate(θ₂, Model2data, 28800, 10))
+2*(Calibrate(θ₀, Model1data, 28800, 10) - Calibrate(θ₁, Model1data, 28800, 10))
+2*(Calibrate(θ₀, Model2data, 28800, 10) - Calibrate(θ₂, Model2data, 28800, 10))
+2*(Calibrate(θ₀, t, 28800, 10) - Calibrate(θ0, t, 28800, 10))
 
-cdf( Chisq(1), -2*log(Calibrate(θ₀, Model2data, 28800, 10) / Calibrate(θ₂, Model2data, 28800, 10)))
+
+cdf( Chisq(210), 2*(Calibrate(θ₀, Model1data, 28800, 10) - Calibrate(θ₁, Model1data, 28800, 10)))
+cdf( Chisq(210), 2*(Calibrate(θ₀, Model2data, 28800, 10) - Calibrate(θ₂, Model2data, 28800, 10)))
+cdf( Chisq(210), 2*(Calibrate(θ₀, t, 28800, 10) - Calibrate(θ0, t, 28800, 10)))
