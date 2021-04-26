@@ -55,20 +55,6 @@ open("Data/Parameters.txt", "w") do file
     end
 end
 
-#=
-θ₁ = CSV.File("Data/Model1/Parameters.txt", header = false) |> Tables.matrix |> vec
-MAE₁ = mean(abs.(θ₁ - exp.(initialSolution)))
-RMSE₁ = sqrt(mean((θ₁ - exp.(initialSolution)) .^ 2))
-θ₂ = CSV.File("Data/Model2/Parameters.txt", header = false) |> Tables.matrix |> vec
-MAE₂ = mean(abs.(θ₂ - exp.(initialSolution)))
-RMSE₂ = sqrt(mean((θ₂ - exp.(initialSolution)) .^ 2))
-distortion1 = (θ₁ - exp.(initialSolution)) ./ exp.(initialSolution)
-distortion2 = (θ₂ - exp.(initialSolution)) ./ exp.(initialSolution)
-α = reshape(θ₁[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
-β = reshape(θ₁[(end - dimension * dimension + 1):end], dimension, dimension)
-α ./ β # Branching ratio
-=#
-
 #---------------------------------------------------------------------------------------------------
 # Read in data for model 1 and 2, also get data for raw hawkes
 Model1data = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> x -> CleanData(x, allowCrossing = true) |> y -> PrepareHawkesData(y)
@@ -102,28 +88,3 @@ end
 cdf( Chisq(210), 2*(Calibrate(θ₀, Model1data, 28800, 10) - Calibrate(θ₁, Model1data, 28800, 10)))
 cdf( Chisq(210), 2*(Calibrate(θ₀, Model2data, 28800, 10) - Calibrate(θ₂, Model2data, 28800, 10)))
 cdf( Chisq(210), 2*(Calibrate(θ₀, RawHawkes, 28800, 10) - Calibrate(θ0, RawHawkes, 28800, 10)))
-
-#=
-# Score test
-Model1Score = ForwardDiff.gradient(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₀)
-Model1Fisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₁)
-Model1ScoreTest = Model1Score' * inv(Model1Fisher) * Model1Score
-
-Model2Score = ForwardDiff.gradient(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₀)
-Model2Fisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₂)
-Model2ScoreTest = Model2Score' * inv(Model2Fisher) * Model2Score
-
-RawScore = ForwardDiff.gradient(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ₀)
-RawFisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ0)
-RawScoreTest = RawScore' * inv(RawFisher) * RawScore
-
-# Wald test
-Model1Fisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₁)
-(θ₁ .- θ₀)' * Model1Fisher * (θ₁ .- θ₀)
-
-Model2Fisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₂)
-(θ₂ .- θ₀)' * Model2Fisher * (θ₂ .- θ₀)
-
-RawFisher = -ForwardDiff.hessian(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ0)
-(θ0 .- θ₀)' * RawFisher * (θ0 .- θ₀)
-=#

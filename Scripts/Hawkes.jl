@@ -307,27 +307,3 @@ function GeneralisedResiduals(history, lambda0, alpha, beta)
     return GE
 end
 #---------------------------------------------------------------------------------------------------
-
-#----- Validation plots and statistics -----#
-#=
-function Validate(simulation::Vector{Vector{Type}}, λ₀::Vector{Float64}, α::Array{Float64, 2}, β::Array{Float64, 2}, T::Int64; format::String = "pdf") where Type <: Real
-	titles = ["BuyMO", "SellMO", "AggressiveBuyLO", "AggressiveSellLO", "PassiveBuyLO", "PassiveSellLO", "AggressiveBuyOC", "AggressiveSellOC", "PassiveBuyOC", "PassiveSellOC"]
-	colors = [:red, :firebrick, :blue, :deepskyblue, :green, :seagreen, :purple, :mediumpurple, :yellow, :black]
-	dimension = length(λ₀)
-	for m in 1:dimension
-		integratedIntensities = Λ(simulation, T, λ₀, α, β, m)
-		# QQ plots
-	    qqPlot = qqplot(Exponential(1), integratedIntensities, xlabel = "Exponential theoretical quantiles", ylabel = "Sample quantiles", title = titles[m], marker = (3, colors[m], stroke(colors[m])), linecolor = :black, legend = false)
-	    savefig(qqPlot, string("Figures/QQPlot", titles[m], ".", format))
-		# Independence plots
-		Uᵢ = cdf.(Exponential(1), integratedIntensities)[1:(end - 1)]
-        Uᵢ₊₁ = cdf.(Exponential(1), integratedIntensities)[2:end]
-        independencePlot = plot(Uᵢ, Uᵢ₊₁, seriestype = :scatter, marker = (3, colors[m], colors[m]), title = titles[m], xlabel = L"U_k = F_{Exp(1)}(t_k - t_{k - 1})", ylabel = L"U_{k + 1} = F_{Exp(1)}(t_{k + 1} - t_k)", legend = false)
-        savefig(independencePlot, string("Figures/IndependencePlot", titles[m], ".", format))
-		# Statistical tests
-        LBTest = LjungBoxTest(integratedIntensities, 20, 3) # Ljung-Box - H_0 = independent
-		KSTest = ExactOneSampleKSTest(integratedIntensities, Exponential(1)) # KS - H_0 = exponential
-        println(string(titles[m], "|", "LjungBox:Q=", round(LBTest.Q, digits = 5), ",p=", round(pvalue(LBTest), digits = 5), "|", "KolmogorovSmirnov:δ=", round(KSTest.δ, digits = 4), ",p=", round(pvalue(KSTest), digits = 4)))
-	end
-end
-=#

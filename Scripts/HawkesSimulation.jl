@@ -18,13 +18,13 @@ HawkesImplementation:
     Main thing to check here is that our parameters result in a relatively balanced system where the number of events reducing the liquidity is roughly the same as the
     number of events increasing the liquidity i.e. ∑(3+4+5+6) ≈ ∑(1+2+7+8+9+10). The event counts of these should be roughly the same.
 =#
-using DataFrames, Dates, ForwardDiff, Optim#, CSV
+using DataFrames, Dates, ForwardDiff, Optim
 clearconsole()
 include(pwd() * "/Scripts/Hawkes.jl")
 include(pwd() * "/Scripts/DataCleaning.jl")
 include(pwd() * "/Scripts/CoinTossXUtilities.jl")
 λ₀ = [0.01; 0.01; 0.02; 0.02; 0.02; 0.02; 0.015; 0.015; 0.015; 0.015]
-α = reduce(hcat, fill(λ₀, 10)) # α  = [repeat([0.01], 10)'; repeat([0.01], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.02], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)'; repeat([0.015], 10)']
+α = reduce(hcat, fill(λ₀, 10))
 β  = fill(0.2, 10, 10)
 function RPareto(xn, α, n = 1)
     return xn ./ (rand(n) .^ (1 / α))
@@ -180,15 +180,3 @@ function SetLimitPrice(limitOrder, bestBid, bestAsk, seed)
     return price
 end
 #---------------------------------------------------------------------------------------------------
-#=
-simulation = ThinningSimulation(λ₀, α, β, 28800; seed = 5)
-reduceLiquid = 0; increaseLiquid = 0
-for event in [3; 4; 5; 6]
-    increaseLiquid += length(simulation[event])
-end
-for event in [1; 2; 7; 8; 9; 10]
-    reduceLiquid += length(simulation[event])
-end
-println(increaseLiquid)
-println(reduceLiquid)
-=#
