@@ -1,4 +1,4 @@
-# Market Simulations with Hawkes and CoinTossX <img align="right" width="200" src="Figures/CoinTossXLogo.PNG">
+# Simulation and estimation of point-process market models with a matching engine <img align="right" width="200" src="Figures/CoinTossXLogo.PNG">
 
 ## Authors
 * Ivan Jericevich
