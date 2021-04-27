@@ -16,7 +16,7 @@ We consider a 10-variate Hawkes process with simple rules to simulate common ord
 ## Usage
 Clone the repository
 ```sh
-git clone https://github.com/IvanJericevich/IJPCDHTG-CoinTossX.git
+git clone https://github.com/IvanJericevich/IJPCTG-HawkesCoinTossX.git
 ```
 Packages can be installed using
 ```julia
