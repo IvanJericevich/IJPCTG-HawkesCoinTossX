@@ -21,7 +21,7 @@ clearconsole()
 #----- Data preparation -----#
 #=
 Function:
-    - Prepare raw data fro cleaning
+    - Prepare raw data for cleaning
     - orders submitted file contains duplicates of un-split trades. These are assigned the "WalkingMO" order type. This is required for Hawkes event classification
 Arguments:
     - ordersSubmitted = the name of the orders submitted file
@@ -49,7 +49,7 @@ function PrepareData(ordersSubmitted::String, trades::String)
 end
 function PrepareHawkesData(orders::DataFrame)
     previousTime = Millisecond(2)
-    data = DataFrame(DateTime = Vector{Float64}(), Type = Vector{Symbol}(), Side = Vector{Symbol}(), IsAggressive = Vector{Bool}())
+    data = DataFrame(DateTime = Vector{Float64}(), Volume = Vector{Int64}(), Type = Vector{Symbol}(), Side = Vector{Symbol}(), IsAggressive = Vector{Bool}())
     for i in 1:nrow(orders)
         order = orders[i, :]
         if order.Type == :CLO # Crossing limit order => record the EMO first
@@ -61,15 +61,15 @@ function PrepareHawkesData(orders::DataFrame)
             end
             side = order.Side == :Buy ? :Sell : :Buy # MO side is opposite to contra side
             time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
-            push!(data, (Dates.value(time) / 1000, :WalkingMO, side, true)) # Push the aggregated EMO
+            push!(data, (Dates.value(time) / 1000, aggregateVolume, :WalkingMO, side, true)) # Push the aggregated EMO
             if aggregateVolume != order.Volume
                 time += Millisecond(1)
-                push!(data, (Dates.value(time) / 1000, :LO, order.Side, true)) # Push the crossed LO with DateTime modified by 1 millisecond
+                push!(data, (Dates.value(time) / 1000, order.Volume - aggregateVolume, :LO, order.Side, true)) # Push the crossed LO with DateTime modified by 1 millisecond (SHOULD I MINUS AGGREGATE VOLUME)
             end
             previousTime = time
         elseif order.Type != :EMO && order.Type != :MO # Disregard split MOs and EMOs since they are aggregated in the above case
             time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
-            push!(data, (Dates.value(time) / 1000, order.Type, order.Side, order.IsAggressive))
+            push!(data, (Dates.value(time) / 1000, order.Volume, order.Type, order.Side, order.IsAggressive))
             previousTime = time
         end
     end
@@ -133,18 +133,19 @@ function ProcessLimitOrder!(file::IOStream, order::DataFrameRow, best::NamedTupl
         push!(isAggressive, true)
     else # Otherwise find the best
         if (side * order.Price) > (side * best.Price) # Change best if price of current order better than the best (side == 1 => order.Price > best.Price) (side == -1 => order.Price < best.Price)
+            best = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created. This includes crossed orders since they are handled later when the EMOs are processed
             if !isempty(contraBest) && (side * order.Price) >= (side * contraBest.Price) # Crossing order => limit order becomes effective market order (to avoid an error first check if the otherside isn't empty)
                 if allowCrossing # Either disallow crossing or treat crossed order as effective market order at the next iteration
                     println(string("Order ", order.OrderId, " crossed the spread"))
                     crossedOrderId = order.OrderId # Update the L1LOB with the crossed order. The trades occuring hereafter will be deducted from this as well as from the best on the contra side
-                    order.Type = :CLO
+                    order.Type = :CLO # Change the order type
                 else
                     error("Negative spread at order " * string(order.OrderId))
                 end
+            else # Only print the LO if it is not a CLO. The CLO is only printed if it is partially filled after aggressing against the contra side
+                midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
+                println(file, string(order.DateTime, ",", best.Price, ",", best.Volume, ",LO,", side, ",", midPrice, ",", microPrice, ",", spread))
             end
-            best = (Price = order.Price, Volume = order.Volume, OrderId = [order.OrderId]) # New best is created (including if order crossed)
-            midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
-            println(file, string(order.DateTime, ",", best.Price, ",", best.Volume, ",LO,", side, ",", midPrice, ",", microPrice, ",", spread))
             push!(isAggressive, true)
         elseif order.Price == best.Price # Add the new order's volume and orderid to the best if they have the same price
             best = (Price = best.Price, Volume = best.Volume + order.Volume, OrderId = vcat(best.OrderId, order.OrderId)) # Best is ammended by adding volume to best and appending the order id
@@ -239,6 +240,7 @@ Function:
 Arguments:
     - file = output file to which L1LOB will be printed
     - order = order to be processed
+    - nextOrder = the order type of the next order to check if a partially filled crossed LO needs to be printed
     - best = best bid (ask) if bid (ask) LO
     - contraBest = best ask (bid) if ask (bid) LO
     - lob = bid (ask) side of LOB if bid (ask) LO
@@ -247,10 +249,9 @@ Arguments:
 Output:
     - Best bid/ask
     - The order id of the crossed order if it hasn't been fully handled. Otherwise nothing
-    - TODO: What about when the crossed order was partially filled and is the only order left in the side and then another standard trade occurs immediately after
 =#
-function ProcessEffectiveMarketOrder!(file::IOStream, order::DataFrameRow, best::NamedTuple, contraBest::NamedTuple, lob::Dict{Int64, Tuple{Int64, Int64}}, crossedOrderId::Int64, side::Int64)# Remove the executed quantity from the LO and push the remaining volume to the LOB
-    if order.Volume == best.Volume # Crossed LO was fully executed against contra side - remove from LOB, and update best. Note that all crossed orders will sit at the best
+function ProcessEffectiveMarketOrder!(file::IOStream, order::DataFrameRow, nextOrder::Symbol, best::NamedTuple, contraBest::NamedTuple, lob::Dict{Int64, Tuple{Int64, Int64}}, crossedOrderId::Int64, side::Int64) # Remove the executed quantity from the LO and push the remaining volume to the LOB
+    if order.Volume == best.Volume # Crossed LO (which is now at the best) was fully executed against contra side - remove from LOB, and update best. Note that all crossed orders will sit at the best
         delete!(lob, crossedOrderId) # Remove the order from the LOB
         if !isempty(lob) # If the LOB is non empty find the best
             bestPrice = side * maximum(side .* first.(collect(values(lob)))) # Find the new best price (bid => side == 1 so find max price) (ask => side == -1 so find min price)
@@ -261,13 +262,16 @@ function ProcessEffectiveMarketOrder!(file::IOStream, order::DataFrameRow, best:
         end
         crossedOrderId = nothing # Crossed LO was filled so reset
     else # Trade partially filled best
-        lob[crossedOrderId] = (lob[crossedOrderId][1], lob[crossedOrderId][2] - order.Volume)
+        lob[crossedOrderId] = (lob[crossedOrderId][1], lob[crossedOrderId][2] - order.Volume) # Update the volume of the crossed LO in the LOB
         best = (Price = best.Price, Volume = best.Volume - order.Volume, OrderId = best.OrderId)
+        if nextOrder != :MO # If the crossed LO has been partially filled but aggressed all contra best orders (no more EMOs left)
+            midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
+            println(file, string(order.DateTime, ",", best.Price, ",", best.Volume, ",CLO,", side, ",", midPrice, ",", microPrice, ",", spread)) # The best already updated so all thats needed is to print and set crossed order = nothing
+            crossedOrderId = nothing # Reset the crossed order indicator as it has been fully handled (need not update crossed order indicator elsewhere)
+        end
     end
-    order.Type = :EMO
-    midPrice = MidPrice(best, contraBest); microPrice = MicroPrice(best, contraBest); spread = Spread(best, contraBest)
-    println(file, string(order.DateTime, ",", order.Price, ",", order.Volume, ",EMO,", side, ",", midPrice, ",", microPrice, ",", spread))
-    return best, crossedOrderId # Return the id of the crossed order if it was partially filled
+    order.Type = :EMO # Change the order type
+    return best, crossedOrderId # Update the crossed order indicator
 end
 #=
 Function:
@@ -288,7 +292,7 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
     isAggressive = Vector{Bool}() # Classifies all events as either aggressive or passive
     imbalance = Vector{Union{Missing, Float64}}() # Calculate the order imbalance in the LOB
     animation = visualise ? Animation() : nothing
-    open("Data/Model1/L1LOB.csv", "w") do file
+    open("Data/Model2/L1LOB.csv", "w") do file
         println(file, "DateTime,Price,Volume,Type,Side,MidPrice,MicroPrice,Spread") # Header
         Juno.progress() do id # Progress bar
             for i in 1:nrow(orders) # Iterate through all orders
@@ -303,19 +307,17 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                 #-- Market Orders --#
                 elseif order.Type == :MO # Market order always affects the best
                     if order.Side == :Buy # Trade was buyer-initiated (Sell MO)
-                        if !isnothing(crossedOrderId) # The crossed order hasn't been fully handled yet. So first aggress it against the crossed LO
-                            bestAsk, crossedOrderId = ProcessEffectiveMarketOrder!(file, order, bestAsk, bestBid, asks, crossedOrderId, -1) # Aggress effective sell MO against ask side. Update LOB and best
-                        else # No crossed order so print standard trade
-                            println(file, string(order.DateTime, ",", order.Price, ",", order.Volume, ",MO,-1,missing,missing,missing")) # Sell trade is only printed if its not an EMO
+                        println(file, string(order.DateTime, ",", order.Price, ",", order.Volume, ",MO,-1,missing,missing,missing")) # Sell trade is always printed (EMOs are just classified as MOs)
+                        bestBid = ProcessMarketOrder!(file, order, bestBid, bestAsk, bids, 1) # Sell trade affects bid side. Always aggress MO/EMO against contra side and update LOB and best. This is done before the processing of the crossed LO
+                        if !isnothing(crossedOrderId) # The crossed order hasn't been fully handled yet. So after handling the above EMO aggress it against the crossed LO
+                            bestAsk, crossedOrderId = ProcessEffectiveMarketOrder!(file, order, orders[i + 1, :Type], bestAsk, bestBid, asks, crossedOrderId, -1) # Aggress effective sell MO against ask side (originating crossed LO). Update crossed order at LOB and best. Print partially filled crossed LO if necessary
                         end
-                        bestBid = ProcessMarketOrder!(file, order, bestBid, bestAsk, bids, 1) # Sell trade affects bid side. Always aggress MO/EMO against contra side and update LOB and best
                     else # Trade was seller-initiated (Buy MO)
-                        if !isnothing(crossedOrderId) # The crossed order hasn't been fully handled yet. So first aggress it against the crossed LO
-                            bestBid, crossedOrderId = ProcessEffectiveMarketOrder!(file, order, bestBid, bestAsk, bids, crossedOrderId, 1) # Aggress effective buy MO against bid side. Update LOB and best
-                        else # No crossed order so print standard trade
-                            println(file, string(order.DateTime, ",", order.Price, ",", order.Volume, ",MO,1,missing,missing,missing")) # Buy trade is only printed if its not an EMO
+                        println(file, string(order.DateTime, ",", order.Price, ",", order.Volume, ",MO,1,missing,missing,missing")) # Buy trade is always printed (EMOs are just classified as MOs)
+                        bestAsk = ProcessMarketOrder!(file, order, bestAsk, bestBid, asks, -1) # Buy trade affects ask side. Always aggress MO/EMO against contra side and update LOB and best. This is done before the processing of the crossed LO
+                        if !isnothing(crossedOrderId) # The crossed order hasn't been fully handled yet. So after handling the above EMO aggress it against the crossed LO
+                            bestBid, crossedOrderId = ProcessEffectiveMarketOrder!(file, order, orders[i + 1, :Type], bestBid, bestAsk, bids, crossedOrderId, 1) # Aggress effective buy MO against bid side (originating crossed LO). Update crossed order at  LOB and best. Print partially filled crossed LO if necessary
                         end
-                        bestAsk = ProcessMarketOrder!(file, order, bestAsk, bestBid, asks, -1) # Buy trade affects ask side. Always aggress MO/EMO against contra side and update LOB and best
                     end
                     push!(isAggressive, true) # MO/EMO are always aggressive
                 #-- Cancel Orders --#
@@ -325,12 +327,11 @@ function CleanData(orders::DataFrame; visualise::Bool = false, allowCrossing::Bo
                     else # Cancel sell limit order
                         bestAsk = ProcessCancelOrder!(file, order, bestAsk, bestBid, asks, isAggressive, -1) # Aggress cancel order against sell side and update LOB and best
                     end
-                    crossedOrderId = nothing
+                #-- Un-split Market Orders --#
                 else # WalkingMO is a trade duplicate which occurs in OrdersSubmitted and reflects the full amounts of trades (un-split trades)
                     push!(isAggressive, true) # Walking MO is always aggressive. Ignore these in cleaning since it is handled by split MOs
-                    crossedOrderId = nothing # Reset since effective market orders have been handled
                 end
-                push!(imbalance, OrderImbalance(bids, asks))
+                push!(imbalance, OrderImbalance(bids, asks)) # Calculate the volume imbalance after every iteration
                 if visualise # Visualisation
                     PlotLOBSnapshot(bids, asks)
                     frame(animation)
@@ -388,26 +389,5 @@ function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf", d
     l = @layout([a; b{0.3h}])
     simulation = plot(bubblePlot, volumeImbalance, layout = l, link = :x)
     savefig(simulation, "Figures/Simulation." * format)
-end
-#---------------------------------------------------------------------------------------------------
-
-#----- Extract OHLCV data -----#
-function OHLCV(orders::DataFrame, resolution)
-    open(string("OHLCV.csv"), "w") do file
-        println(file, "DateTime,MidOpen,MidHigh,MidLow,MidClose,MicroOpen,MicroHigh,MicroLow,MicroClose,Volume,VWAP")
-        barTimes = orders.DateTime[1]:resolution:orders.DateTime[end]
-        for t in 1:(length(barTimes) - 1)
-            startIndex = searchsortedfirst(orders.DateTime, barTimes[t])
-            endIndex = searchsortedlast(orders.DateTime, barTimes[t + 1])
-            if !(startIndex >= endIndex)
-                bar = orders[startIndex:endIndex, :]
-                tradesBar = filter(x -> x.Type == "Trade", bar)
-                midPriceOHLCV = string(bar.MidPrice[1], ",", maximum(bar.MidPrice), ",", minimum(bar.MidPrice), ",", bar.MidPrice[end])
-                microPriceOHLCV = string(bar.MicroPrice[1], ",", maximum(bar.MicroPrice), ",", minimum(bar.MicroPrice), ",", bar.MicroPrice[end])
-                vwap = !isempty(tradesBar) ? sum(tradesBar.Volume .* tradesBar.Price) / sum(tradesBar.Volume) : missing
-                println(file, string(barTimes[t], ",", midPriceOHLCV, ",", microPriceOHLCV, ",", sum(bar.Volume), ",", vwap))
-            end
-        end
-    end
 end
 #---------------------------------------------------------------------------------------------------
