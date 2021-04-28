@@ -74,10 +74,31 @@ Varθ0 = inv(-ForwardDiff.hessian(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ
 
 CIθ₁ = zeros(210, 2); CIθ₂ = zeros(210, 2); CIθ0 = zeros(210, 2)
 for i in 1:210
-    CIθ₁[i,1] = θ₁[i] - 1.96 * sqrt(abs(Varθ₁[i,i])); CIθ₁[i,2] = θ₁[i] + 1.96 * sqrt(abs(Varθ₁[i,i]))
-    CIθ₂[i,1] = θ₂[i] - 1.96 * sqrt(abs(Varθ₂[i,i])); CIθ₂[i,2] = θ₂[i] + 1.96 * sqrt(abs(Varθ₂[i,i]))
-    CIθ0[i,1] = θ0[i] - 1.96 * sqrt(abs(Varθ0[i,i])); CIθ0[i,2] = θ0[i] + 1.96 * sqrt(abs(Varθ0[i,i]))
+    ## Getting negative variances for model 1 and 2. Not sure what is causing it
+    # CIθ₁[i,1] = θ₁[i] - 1.96 * sqrt(Varθ₁[i,i]); CIθ₁[i,2] = θ₁[i] + 1.96 * sqrt(Varθ₁[i,i])
+    # CIθ₂[i,1] = θ₂[i] - 1.96 * sqrt(Varθ₂[i,i]); CIθ₂[i,2] = θ₂[i] + 1.96 * sqrt(Varθ₂[i,i])
+    CIθ0[i,1] = θ0[i] - 1.96 * sqrt(Varθ0[i,i]/T); CIθ0[i,2] = θ0[i] + 1.96 * sqrt(Varθ0[i,i]/T)
 end
+
+plot(1:210, θ₀, seriestype = :scatter, markershape = :hline)
+plot!(1:210, θ0, seriestype = :scatter, yerror = 1.96 .* sqrt.(diag(Varθ0)./T), markershape = :hline, color = :black)
+
+raw = [θ0 1.96 .* sqrt.(diag(Varθ0)./T)]
+save("temp.jld", "raw", raw)
+
+rawd = load("temp.jld")
+raw = rawd["raw"]
+
+# Gradθ₁ = ForwardDiff.gradient(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₁)
+# # Varθ₁  = Gradθ₁ * Gradθ₁'
+#
+# Gradθ₂ = ForwardDiff.gradient(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₂)
+# # Varθ₂  = Gradθ₂ * Gradθ₂'
+#
+# Gradθ0 = ForwardDiff.gradient(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ0)
+# # Varθ0  = Gradθ0 * Gradθ0'
+#
+# -Gradθ₁ * Gradθ₁'
 
 #----- Hypothesis tests -----#
 # Likelihood ratio test
