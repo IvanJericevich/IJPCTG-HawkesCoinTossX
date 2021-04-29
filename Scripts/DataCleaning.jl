@@ -59,15 +59,19 @@ function PrepareHawkesData(orders::DataFrame)
                 aggregateVolume += orders.Volume[i + count]
                 count += 1
             end
-            side = order.Side == :Buy ? :Sell : :Buy # MO side is opposite to contra side
             time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
-            push!(data, (Dates.value(time) / 1000, aggregateVolume, :WalkingMO, side, true)) # Push the aggregated EMO
+            push!(data, (Dates.value(time) / 1000, aggregateVolume, :WalkingMO, order.Side, true)) # Push the aggregated EMO. NB EMO occurs on the same side as the CLO
             if aggregateVolume != order.Volume
                 time += Millisecond(1)
                 push!(data, (Dates.value(time) / 1000, order.Volume - aggregateVolume, :LO, order.Side, true)) # Push the crossed LO with DateTime modified by 1 millisecond (SHOULD I MINUS AGGREGATE VOLUME)
             end
             previousTime = time
-        elseif order.Type != :EMO && order.Type != :MO # Disregard split MOs and EMOs since they are aggregated in the above case
+        elseif order.Type == :WalkingMO # Standard un-split trades
+            side = order.Side == :Buy ? :Sell : :Buy # NB MO side is opposite to contra side
+            time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
+            push!(data, (Dates.value(time) / 1000, order.Volume, order.Type, side, order.IsAggressive)) # Print the correct side
+            previousTime = time
+        elseif order.Type == :LO || order.Type == :OC # Disregard split MOs and EMOs since they are aggregated in the above case. Only consider LOs and OCs
             time = order.DateTime == previousTime ? order.DateTime + Millisecond(1) : order.DateTime
             push!(data, (Dates.value(time) / 1000, order.Volume, order.Type, order.Side, order.IsAggressive))
             previousTime = time
