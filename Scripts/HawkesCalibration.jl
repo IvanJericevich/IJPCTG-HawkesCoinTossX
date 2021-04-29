@@ -68,9 +68,12 @@ RawHawkes = ThinningSimulation(λ₀, α, β, T, seed = 1)
 θ₂ = CSV.File("Data/Model2/Parameters.txt", header = false) |> Tables.matrix |> vec
 
 #----- Confidence intervals -----#
-Varθ₁ = inv(-ForwardDiff.hessian(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₁))
-Varθ₂ = inv(-ForwardDiff.hessian(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₂))
-Varθ0 = inv(-ForwardDiff.hessian(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ0))
+FIMθ₁ = -ForwardDiff.hessian(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₁)
+Varθ₁ = inv(FIMθ₁)
+FIMθ₂ = -ForwardDiff.hessian(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₂)
+Varθ₂ = inv(FIMθ₂)
+FIMθ0 = -ForwardDiff.hessian(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ0)
+Varθ0 = inv(FIMθ0)
 
 CIθ₁ = zeros(210, 2); CIθ₂ = zeros(210, 2); CIθ0 = zeros(210, 2)
 for i in 1:210
@@ -83,22 +86,6 @@ end
 plot(1:210, θ₀, seriestype = :scatter, markershape = :hline)
 plot!(1:210, θ0, seriestype = :scatter, yerror = 1.96 .* sqrt.(diag(Varθ0)./T), markershape = :hline, color = :black)
 
-raw = [θ0 1.96 .* sqrt.(diag(Varθ0)./T)]
-save("temp.jld", "raw", raw)
-
-rawd = load("temp.jld")
-raw = rawd["raw"]
-
-# Gradθ₁ = ForwardDiff.gradient(θ -> -Calibrate(θ, Model1data, 28800, 10), θ₁)
-# # Varθ₁  = Gradθ₁ * Gradθ₁'
-#
-# Gradθ₂ = ForwardDiff.gradient(θ -> -Calibrate(θ, Model2data, 28800, 10), θ₂)
-# # Varθ₂  = Gradθ₂ * Gradθ₂'
-#
-# Gradθ0 = ForwardDiff.gradient(θ -> -Calibrate(θ, RawHawkes, 28800, 10), θ0)
-# # Varθ0  = Gradθ0 * Gradθ0'
-#
-# -Gradθ₁ * Gradθ₁'
 
 #----- Hypothesis tests -----#
 # Likelihood ratio test
@@ -109,3 +96,8 @@ raw = rawd["raw"]
 cdf( Chisq(210), 2*(Calibrate(θ₀, Model1data, 28800, 10) - Calibrate(θ₁, Model1data, 28800, 10)))
 cdf( Chisq(210), 2*(Calibrate(θ₀, Model2data, 28800, 10) - Calibrate(θ₂, Model2data, 28800, 10)))
 cdf( Chisq(210), 2*(Calibrate(θ₀, RawHawkes, 28800, 10) - Calibrate(θ0, RawHawkes, 28800, 10)))
+
+findall(x -> x<0, diag(Varθ₁))
+findall(x -> x<0, diag(Varθ₂))
+θ₁[findall(x -> x<0, diag(Varθ₁))]
+θ₂[findall(x -> x<0, diag(Varθ₂))]
