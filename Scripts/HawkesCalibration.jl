@@ -8,7 +8,7 @@ HawkesCalibration:
     2. Confidence intervals
     3. Hypothesis tests
 =#
-using DataFrames, Dates, Optim, CSV, ForwardDiff, Distributions
+using DataFrames, Dates, Optim, CSV, ForwardDiff, Distributions, Plots, LaTeXStrings
 clearconsole()
 include(pwd() * "/Scripts/Hawkes.jl")
 include(pwd() * "/Scripts/DataCleaning.jl")
@@ -101,3 +101,46 @@ findall(x -> x<0, diag(Varθ₁))
 findall(x -> x<0, diag(Varθ₂))
 θ₁[findall(x -> x<0, diag(Varθ₁))]
 θ₂[findall(x -> x<0, diag(Varθ₂))]
+
+
+function Distortion(θ::Vector{Float64}, θ₀::Vector{Float64}, model::String; format = "pdf")
+    dimension = 10
+    αDistortion = reshape(θ[(dimension + 1):(dimension * dimension + dimension), 1] - θ₀[(dimension + 1):(dimension * dimension + dimension)], dimension, dimension)
+    alphaDistortion = heatmap(1:10, 1:10, αDistortion, xticks = 1:10, yticks = 1:10, yflip = true, c = cgrad([:blue, :white, :red], scale = :exp), colorbar_title = L"\Delta \alpha")
+    annotate!([(j,i, text(round(αDistortion[i,j], digits = 5), 5, :black, :center)) for i in 1:10 for j in 1:10], linecolor = :white)
+    savefig(alphaDistortion, string(model, "AlphaDistortion.", format))
+    βDistortion = reshape(θ[(end - dimension * dimension + 1):end, 1] - θ₀[(end - dimension * dimension + 1):end], dimension, dimension)
+    betaDistortion = heatmap(1:10, 1:10, βDistortion, xticks = 1:10, yticks = 1:10, yflip = true, c = cgrad([:blue, :white, :red], scale = :exp), colorbar_title = L"\Delta \beta")
+    annotate!([(j,i, text(round(βDistortion[i,j], digits = 5), 5, :black, :center)) for i in 1:10 for j in 1:10], linecolor = :white)
+    savefig(betaDistortion, string(model, "BetaDistortion.", format))
+    muDistortion = plot(1:10, θ[1:10] - θ₀[1:10], xlabel = "Event Number", ylabel = L"\Delta \mu", seriestype = :sticks, linecolor = :black, legend = false, xticks = 1:10)
+    savefig(lambdaDistortion, string(model, "MuDistortion.", format))
+end
+
+Distortion(θ0, θ₀, "Hawkes")
+Distortion(θ₁, θ₀, "Model1")
+Distortion(θ₂, θ₀, "Model2")
+
+
+
+function ImpulseResponse(θ::Vector{Float64}, index::Int64, data::Vector{Vector{Float64}}; format::String = "pdf")
+    dimension = 10
+    labels = ["Buy (MO)", "Sell (MO)", "Aggressive Bid (LO)", "Aggressive Ask (LO)", "Passive Bid (LO)", "Passive Ask (LO)", "Aggressive Cancel Bid", "Aggressive Cancel Sell", "Passive Cancel Bid", "Passive Cancel Ask"]
+    colors = [:red, :firebrick, :blue, :deepskyblue, :green, :seagreen, :purple, :mediumpurple, :yellow, :black]
+    β_hat = reshape(θ[(end - dimension * dimension + 1):end, 1], dimension, dimension)
+    α_hat = reshape(θ[(dimension + 1):(dimension * dimension + dimension), 1], dimension, dimension)
+    branchingRatio = α_hat ./ β_hat
+    impulseResponse = plot([log(2) / β_hat[index, 1]], [branchingRatio[index, 1]], seriestype = :scatter, marker = (colors[1], stroke(colors[1]), (length(data[1]) * 100) / sum(length.(data))), label = labels[1], xlabel = "Half-life effect (seconds)", ylabel = "Expected number of precipitated events", legend = :topright)
+    for i in 2:10
+        plot!(impulseResponse, [log(2) / β_hat[index, i]], [branchingRatio[index, i]], seriestype = :scatter, marker = (colors[i], stroke(colors[i]), (length(data[i]) * 100) / sum(length.(data))), label = labels[i])
+    end
+    savefig(impulseResponse, string("ImpulseResponse", index, ".", format))
+end
+ImpulseResponse(θ₁, 1, Model1data)
+ImpulseResponse(θ₁, 3, Model1data)
+ImpulseResponse(θ₁, 4, Model1data)
+
+
+ImpulseResponse(θ₂, 1, Model2data)
+ImpulseResponse(θ₂, 2, Model2data)
+ImpulseResponse(θ₂, 10, Model2data)

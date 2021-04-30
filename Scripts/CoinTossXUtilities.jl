@@ -13,9 +13,10 @@ CoinTossXUtilities:
     7. Cancel an existing order
     8. Receive updates to the best bid/ask
     9. Receive snapshot of LOB
-    10. Market data timeouts
-    11. Destroy client by logging out and ending the trading session
-    12. Shutdown all components of CoinTossX
+    10. Receive static price reference at the end of each auction
+    11. Market data timeouts
+    12. Destroy client by logging out and ending the trading session
+    13. Shutdown all components of CoinTossX
 =#
 using JavaCall
 import JavaCall: iterator
@@ -150,6 +151,12 @@ function ReceiveLOBSnapshot(client::Client)
         push!(LOB, fields[1] => (Side = fields[2], Price = parse(Int, fields[4]), Volume = parse(Int, fields[3])))
     end
     return LOB
+end
+#---------------------------------------------------------------------------------------------------
+
+#----- Receive static price reference at the end of each auction -----#
+function StaticPriceReference(client::Client)
+    return jcall(client.javaObject, "getStaticPriceReference", jlong, ())
 end
 #---------------------------------------------------------------------------------------------------
 
