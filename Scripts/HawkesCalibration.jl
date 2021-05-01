@@ -25,7 +25,7 @@ dimension = 10
 data = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> x -> CleanData(x, allowCrossing = true) |> y -> PrepareHawkesData(y)
 initialSolution = log.(vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1))))
 logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), data, T, dimension), initialSolution, autodiff = :forward)
-@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true, iterations = 2000))
+@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true, iterations = 10000))
 open("Data/Model1/Parameters.txt", "w") do file
     for p in exp.(Optim.minimizer(calibratedParameters))
         println(file, p)
@@ -36,7 +36,7 @@ end
 data = PrepareData("Model2/OrdersSubmitted_1", "Model2/Trades_1") |> x -> CleanData(x, allowCrossing = false) |> y -> PrepareHawkesData(y)
 initialSolution = log.(vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1))))
 logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), data, T, dimension), initialSolution, autodiff = :forward)
-@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true, iterations = 2000))
+@time calibratedParameters = optimize(logLikelihood, initialSolution, LBFGS(), Optim.Options(show_trace = true, iterations = 10000))
 open("Data/Model2/Parameters.txt", "w") do file
     for p in exp.(Optim.minimizer(calibratedParameters))
         println(file, p)
@@ -48,7 +48,7 @@ Random.seed!(1)
 t = ThinningSimulation(λ₀, α, β, T, seed = 1)
 init = log.(vec(vcat(λ₀, reshape(α, :, 1), reshape(β, :, 1))))
 logLikelihood = TwiceDifferentiable(θ -> Calibrate(exp.(θ), t, T, dimension), init, autodiff = :forward)
-calibratedParameters = optimize(logLikelihood, init, LBFGS(), Optim.Options(show_trace = true, iterations = 2000))
+calibratedParameters = optimize(logLikelihood, init, LBFGS(), Optim.Options(show_trace = true, iterations = 10000))
 open("Data/Parameters.txt", "w") do file
     for p in exp.(Optim.minimizer(calibratedParameters))
         println(file, p)
