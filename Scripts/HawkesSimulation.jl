@@ -1,7 +1,7 @@
 #=
 HawkesImplementation:
 - Julia version: 1.5.3
-- Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
+- Authors: Ivan Jericevich, Patrick Chang, Tim Gebbie
 - Function: Submit 10-variate Hawkes simulation to CoinTossX
 - Event types:
     1. MO to buy

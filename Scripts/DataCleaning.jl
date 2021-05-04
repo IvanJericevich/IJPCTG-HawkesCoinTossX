@@ -1,14 +1,13 @@
 #=
 DataCleaning:
 - Julia version: 1.5.3
-- Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
+- Authors: Ivan Jericevich, Patrick Chang, Tim Gebbie
 - Function: Clean CoinTossX simulated data into L1LOB and OHLCV data for stylized fact analysis as well as visualisation of HFT time-series
 - Structure:
     1. Data preparation
     2. Supplementary functions
     3. Clean raw data into L1LOB format
     4. Plot simulation results
-    5. Extract OHLCV data
 - Examples:
     taqData = PrepareData("Model1/OrdersSubmitted_1", "Model1/Trades_1") |> taq -> CleanData(taq; allowCrossing = true)
     hawkesData = PrepareHawkesData(taqData)
@@ -97,13 +96,13 @@ function OrderImbalance(bids::Dict{Int64, Tuple{Int64, Int64}}, asks::Dict{Int64
     if isempty(bids) && isempty(asks)
         return missing
     elseif isempty(bids)
-        return - sum(last.(collect(values(asks))))
+        return -1#- sum(last.(collect(values(asks))))
     elseif isempty(asks)
-        return sum(last.(collect(values(bids))))
+        return 1#sum(last.(collect(values(bids))))
     else
         totalBuyVolume = sum(last.(collect(values(bids))))
         totalSellVolume = sum(last.(collect(values(asks))))
-        return totalBuyVolume - totalSellVolume
+        return (totalBuyVolume - totalSellVolume) / (totalBuyVolume + totalSellVolume)
     end
 end
 #---------------------------------------------------------------------------------------------------
@@ -384,14 +383,14 @@ function VisualiseSimulation(orders::DataFrame, l1lob::String; format = "pdf", d
     plot!(bubblePlot, bids.DateTime, bids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), 0.7), label = "Bid (LO)")
     plot!(bubblePlot, sells.DateTime, sells.Price, seriestype = :scatter, marker = (:red, stroke(:red), :utriangle, 0.7), label = "Sell (MO)")
     plot!(bubblePlot, buys.DateTime, buys.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :utriangle, 0.7), label = "Buy (MO)")
-    plot!(bubblePlot, cancelAsks.DateTime, cancelAsks.Price, seriestype = :scatter, marker = (:red, stroke(:red), :xcross, 0.7), label = "Cancel Ask (LO)")
-    plot!(bubblePlot, cancelBids.DateTime, cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid (LO)")
+    plot!(bubblePlot, cancelAsks.DateTime, cancelAsks.Price, seriestype = :scatter, marker = (:red, stroke(:red), :xcross, 0.7), label = "Cancel Ask")
+    plot!(bubblePlot, cancelBids.DateTime, cancelBids.Price, seriestype = :scatter, marker = (:blue, stroke(:blue), :xcross, 0.7), label = "Cancel Bid")
     plot!(bubblePlot, l1lob.DateTime, l1lob.MidPrice, seriestype = :steppost, linecolor = :black, label = "Mid-price")
     plot!(bubblePlot, l1lob.DateTime, l1lob.MicroPrice, seriestype = :line, linecolor = :green, label = "Micro-price")
-    volumeImbalance = plot(orders.DateTime, orders.Imbalance, seriestype = :line, linecolor = :purple, xlabel = "Time (s)", ylabel = "Order Imbalance (%)", label = "OrderImbalance", legend = :topleft, legendfontsize = 5)
+    volumeImbalance = plot(orders.DateTime, orders.Imbalance, seriestype = :line, linecolor = :purple, xlabel = "Time (s)", ylabel = "Order Imbalance", label = "OrderImbalance", legend = :topleft, legendfontsize = 5)
     plot!(twinx(), l1lob.DateTime, l1lob.Spread, seriestype = :steppost, linecolor = :orange, xlabel = "Time (s)", ylabel = "Spread", label = "Spread", legend = :topright, legendfontsize = 5)
     l = @layout([a; b{0.3h}])
-    simulation = plot(bubblePlot, volumeImbalance, layout = l, link = :x)
+    simulation = plot(bubblePlot, volumeImbalance, layout = l, link = :x, guidefontsize = 7)
     savefig(simulation, "Figures/Simulation." * format)
 end
 #---------------------------------------------------------------------------------------------------

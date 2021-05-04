@@ -1,8 +1,8 @@
 #=
 Hawkes
 - Julia version: 1.5.3
-- Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
-- Goal: Quick script to ensure all Hawkes functions are working appropriately
+- Authors: Ivan Jericevich, Patrick Chang, Tim Gebbie
+- Function: Quick script to ensure all Hawkes functions are working appropriately
 =#
 
 using Optim, Statistics

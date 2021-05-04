@@ -1,7 +1,7 @@
 #=
 Hawkes
 - Julia version: 1.5.3
-- Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
+- Authors: Ivan Jericevich, Patrick Chang, Tim Gebbie
 - Function: Provide the necessary functions for calibrating and simulating a multivariate Hawkes process (Toke and Pomponio 2012)
 - Structure:
 	1. Supplementary functions
@@ -10,11 +10,8 @@ Hawkes
 	4. Recursive relation
 	5. Integrated intensity
 	6. Log-likelihood objective
-	7. Hawkes moments
-	8. Method of moments objective
-	9. Calibration
-	10. Generalised residuals
-	11. Validation plots and statistics
+	7. Calibration
+	8. Generalised residuals
 - Symbols:
 	α = DxD matrix of excitations
     β = DxD matrix of rates of decay

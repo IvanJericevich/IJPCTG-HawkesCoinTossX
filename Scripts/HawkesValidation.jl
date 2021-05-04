@@ -1,12 +1,12 @@
 #=
 HawkesCalibration:
 - Julia version: 1.5.3
-- Authors: Ivan Jericevich, Patrick Chang, Dieter Hendricks, Tim Gebbie
+- Authors: Ivan Jericevich, Patrick Chang, Tim Gebbie
 - Function: Validate calibrated parameters using hypothesis tests and a qq-plot
 - Structure:
     1. Validation plots and statistics
 - Examples
-	Validation(1, format = "png")
+	Validation(1)
 =#
 using HypothesisTests, Distributions
 clearconsole()
