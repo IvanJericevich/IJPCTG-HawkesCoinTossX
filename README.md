@@ -11,7 +11,7 @@ We consider a 10-variate Hawkes process with simple rules to simulate common ord
 ## Prerequisites
 * [Julia](https://julialang.org) programming langauge
 * A text editor or IDE such as [Atom](https://flight-manual.atom.io/getting-started/sections/installing-atom/), [VS Code](https://code.visualstudio.com/download) or [Jupyter](https://jupyter.org/install)
-* CoinTossX matching engine. The version used to obtain these results is version ... For instructions on how to install, start, and use CoinTossX refer to [CoinTossX](https://github.com/dharmeshsing/CoinTossX)
+* CoinTossX matching engine. The version used to obtain these results is version [v1.1.0](https://github.com/dharmeshsing/CoinTossX/tree/v1.1.0) For instructions on how to install, start, and use CoinTossX refer to [CoinTossX](https://github.com/dharmeshsing/CoinTossX)
 
 ## Usage
 Clone the repository
